@@ -1,17 +1,13 @@
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from tinydb import TinyDB
 
+from database import get_db, get_suppliers_table
 from models import Supplier, SupplierCountry, SupplierStatus
 
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
-
-DB_PATH = Path(__file__).resolve().parent.parent / "suppliers_db.json"
-SUPPLIERS_TABLE = "suppliers"
 
 
 class SupplierRecord(Supplier):
@@ -24,10 +20,6 @@ class RateUpdatePayload(BaseModel):
 
 class StatusUpdatePayload(BaseModel):
 	status: SupplierStatus
-
-
-def _db() -> TinyDB:
-	return TinyDB(DB_PATH)
 
 
 def _as_storable(supplier: Supplier) -> dict:
@@ -51,8 +43,8 @@ def _find_supplier_or_404(table, supplier_id: int):
 
 @router.post("", response_model=SupplierRecord, status_code=201)
 def create_supplier(payload: Supplier):
-	with _db() as db:
-		table = db.table(SUPPLIERS_TABLE)
+	with get_db() as db:
+		table = get_suppliers_table(db)
 		doc_id = table.insert(_as_storable(payload))
 		created = table.get(doc_id=doc_id)
 		return _attach_id(created)
@@ -63,8 +55,8 @@ def list_suppliers(
 	country: SupplierCountry | None = Query(default=None),
 	category: str | None = Query(default=None),
 ):
-	with _db() as db:
-		table = db.table(SUPPLIERS_TABLE)
+	with get_db() as db:
+		table = get_suppliers_table(db)
 		docs = table.all()
 
 	results = []
@@ -80,16 +72,16 @@ def list_suppliers(
 
 @router.get("/{supplier_id}", response_model=SupplierRecord)
 def get_supplier(supplier_id: int):
-	with _db() as db:
-		table = db.table(SUPPLIERS_TABLE)
+	with get_db() as db:
+		table = get_suppliers_table(db)
 		supplier = _find_supplier_or_404(table, supplier_id)
 		return _attach_id(supplier)
 
 
 @router.patch("/{supplier_id}/rate", response_model=SupplierRecord)
 def update_supplier_rate(supplier_id: int, payload: RateUpdatePayload):
-	with _db() as db:
-		table = db.table(SUPPLIERS_TABLE)
+	with get_db() as db:
+		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
 
 		table.update(
@@ -106,8 +98,8 @@ def update_supplier_rate(supplier_id: int, payload: RateUpdatePayload):
 
 @router.patch("/{supplier_id}/status", response_model=SupplierRecord)
 def update_supplier_status(supplier_id: int, payload: StatusUpdatePayload):
-	with _db() as db:
-		table = db.table(SUPPLIERS_TABLE)
+	with get_db() as db:
+		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
 		table.update({"status": payload.status}, doc_ids=[supplier_id])
 		updated = table.get(doc_id=supplier_id)
@@ -117,8 +109,8 @@ def update_supplier_status(supplier_id: int, payload: StatusUpdatePayload):
 
 @router.delete("/{supplier_id}", status_code=200)
 def delete_supplier(supplier_id: int):
-	with _db() as db:
-		table = db.table(SUPPLIERS_TABLE)
+	with get_db() as db:
+		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
 		table.remove(doc_ids=[supplier_id])
 

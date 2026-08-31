@@ -1,9 +1,7 @@
-from tinydb import Query, TinyDB
+from tinydb import Query
 
+from database import get_db, get_suppliers_table
 from models import Supplier
-
-DB_FILE = "suppliers_db.json"
-TABLE_NAME = "suppliers"
 
 
 SUPPLIERS_SEED = [
@@ -179,8 +177,8 @@ def supplier_exists(table, supplier: Supplier) -> bool:
 
 def main() -> None:
     inserted_count = 0
-    with TinyDB(DB_FILE) as db:
-        suppliers_table = db.table(TABLE_NAME)
+    with get_db() as db:
+        suppliers_table = get_suppliers_table(db)
 
         for raw_supplier in SUPPLIERS_SEED:
             supplier = Supplier(**raw_supplier)
