@@ -1,5 +1,74 @@
 # Progress
 
+## Supply directory seed migration to routes module (2026-08-30)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/routes/seed.py`
+2. `backrooms/services/Supply_directory_API/seed.py`
+
+What changed:
+1. Moved TinyDB seeding execution logic (`supplier_exists` and `main`) into `routes/seed.py` so seed data and seeding behavior live in one module.
+2. Kept root `seed.py` as a compatibility wrapper that imports and delegates to `routes.seed.main`.
+
+Follow-up cleanup:
+1. Updated `pyproject.toml` script entry from `seed:main` to `routes.seed:main`.
+2. Removed obsolete root `seed.py` wrapper from `backrooms/services/Supply_directory_API`.
+3. Removed `seed.py` from Hatch wheel include list.
+
+Validation performed:
+1. `python -m py_compile backrooms/services/Supply_directory_API/routes/seed.py backrooms/services/Supply_directory_API/seed.py` passed.
+2. `uv run seed` from `backrooms/services/Supply_directory_API` passed (`Inserted records: 0`).
+
+Remaining risks / notes:
+1. If future packaging changes remove top-level module resolution, imports may need to switch to package-relative style.
+
+## Supply directory TinyDB routes (2026-08-28)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/routes/suppliers.py`
+
+What changed:
+1. Added full FastAPI router for supplier directory management backed by local TinyDB file storage (`suppliers_db.json`).
+2. Implemented required endpoints: create, list (with optional `country` and `category` filters), get by ID, update monthly rate, update status, and delete by ID.
+3. Enforced API behavior aligned to context constraints:
+   - invalid input types/values handled by FastAPI/Pydantic validation (`422`)
+   - missing supplier IDs return `404`
+   - rate updates automatically refresh `updated_at` timestamp
+4. Route responses include the TinyDB-assigned document ID as `id`.
+
+Validation performed:
+1. `python -m py_compile backrooms/services/Supply_directory_API/routes/suppliers.py` passed.
+2. Editor diagnostics for the route module reported no errors.
+
+Remaining risks / notes:
+1. Follow-up HTTP integration tests can be added once local test-client dependency chain is standardized.
+
+## Supply directory app wiring and seeder (2026-08-28)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/main.py`
+2. `backrooms/services/Supply_directory_API/seed.py`
+3. `backrooms/services/Supply_directory_API/routes/suppliers.py`
+4. `backrooms/services/Supply_directory_API/pyproject.toml`
+
+What changed:
+1. Wired the FastAPI app entrypoint in `main.py` and mounted the supplier router.
+2. Added root `seed.py` that validates all seed suppliers through Pydantic, inserts only missing records into TinyDB, and prints inserted-record totals.
+3. Made route imports compatible with service-local execution (`from models import ...`).
+4. Added local `pyproject.toml` with dependencies and console script mapping so `uv run seed` executes directly.
+
+Validation performed:
+1. `python -m py_compile` passed for `main.py`, `seed.py`, and `routes/suppliers.py`.
+2. Seeder direct execution passed:
+   - first run inserted 15 records
+   - second run inserted 0 records (duplicate-safe)
+3. `uv run seed` passed and executed the configured seed command (`Inserted records: 0` on current DB state).
+4. Direct route-function smoke test passed for create/list/get/rate-update/status-update/delete.
+5. Editor diagnostics reported no errors in changed Python files.
+
+Remaining risks / notes:
+1. FastAPI `TestClient`-based HTTP smoke testing in this environment is currently blocked by missing optional package `httpx2` from the local Starlette test dependency chain.
+
 ## Incident analyzer CORS fix (2026-08-23)
 
 Updated `backrooms/services/APIs/analyzer-api.py` with explicit CORS support for the local backoffice origins on ports `3000` and `3001`. Additional origins can be supplied through `ANALYZER_ALLOWED_ORIGINS` as a comma-separated list.
