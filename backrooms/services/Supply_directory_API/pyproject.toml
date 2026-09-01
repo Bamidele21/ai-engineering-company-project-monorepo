@@ -1,0 +1,27 @@
+[project]
+name = "nexova-supply-directory-api"
+version = "0.1.0"
+description = "Nexova supplier directory TinyDB API"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116.0",
+  "pydantic[email]>=2.11.0",
+  "tinydb>=4.8.2",
+]
+
+[project.scripts]
+seed = "routes.seed:main"
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+include = [
+  "main.py",
+  "models.py",
+  "routes/*.py",
+]
