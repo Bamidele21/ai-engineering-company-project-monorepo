@@ -1,0 +1,99 @@
+
+> #### AUTH-03 — Password recovery and change
+>
+> The platform needs two password mechanisms — reset when the user forgot it, and change while logged in. This covers both the API and the frontend:
+>
+> **Backend:**
+>
+> - `POST /auth/forgot-password` — receives an email, validates the user exists, generates a signed short-lived reset token, and sends a reset link to the user's email address.
+> - `POST /auth/reset-password` — receives the reset token and a new password, validates the token (signature + expiry), hashes the new password, and updates the user record. The token must be invalidated after use.
+> - `POST /auth/change-password` — authenticated endpoint. Receives the current password and a new password, verifies the current one, hashes the new password, and updates the user record.
+>
+> **Frontend:**
+>
+> - `/forgot-password` — form where the user enters their email. Always shows a confirmation message after submission, regardless of whether the address exists, to prevent user enumeration.
+> - `/reset-password` — form where the user sets a new password. Reads the reset token from the URL query string and submits it to the API alongside the new password. On success, redirects to `/login`.
+> - `/account/change-password` — form with current password, new password, and confirmation. Validates that the new password and confirmation match before calling the API.
+>
+> For email delivery, choose one of the following services and integrate it:
+>
+> - [Resend](https://resend.com/)
+> - [SendGrid (Twilio)](https://www.twilio.com/en-us/sendgrid)
+>
+> **Why only these two?** For this exercise, **Resend** and **SendGrid** are the practical choices: you can complete the reset flow in development **without a custom domain** (Resend via their onboarding sender; SendGrid via trial/sandbox or a verified single sender — check their current docs). Alternatives such as Mailgun or MailerSend typically require you to **verify your own domain in DNS** before sending to arbitrary recipients, which blocks many students during the project.
+>
+> Both offer a free tier sufficient for development. API keys must be stored in environment variables — never hardcoded.
+
+### Complementary knowledge: how a password reset flow works
+
+The flow has three steps and two separate moments in time:
+
+1. **Request** — the user submits their email. The server generates a reset token (a signed JWT or a random string stored in the database), builds a reset URL containing that token (`/reset-password?token=<token>`), and sends it to the user's email via a transactional email service.
+
+2. **Reset** — the user clicks the link, lands on the `/reset-password` page, enters a new password, and submits. The frontend sends the token (read from the URL) and the new password to the API. The server validates the token (signature, expiry, **and that it has not already been used**), updates the password, and invalidates the token so it can't be reused.
+
+3. **Confirmation** — the user is redirected to `/login` and can sign in with the new password.
+
+**Why always show a confirmation message?** If the form shows "email not found" for addresses that don't exist, an attacker can use that to enumerate which emails are registered. Always responding with "if that address is in our system, you'll receive a link" prevents this.
+
+**Token expiry and reuse.** A reset token should last 15–60 minutes and must be unusable after one successful reset. A JWT with only an `exp` claim cannot be invalidated after use. Persist server-side state: a hashed token row, a used-token record, or a `password_changed_at` timestamp that rejects tokens issued before that moment. Encoding expiry in the JWT payload is not enough.
+
+---
+
+## 🌱 How to Start the Project
+
+This project continues inside your existing monorepo. Open a new branch: `git switch -c feature/password-reset`.
+
+Before you start, sign up for one of the email services listed above and obtain an API key. Store it in your `.env` file. Make sure `.env` is in your `.gitignore` — never commit API keys.
+
+---
+
+## 💻 What You Need to Do
+
+### Backend
+
+- [ ] `POST /auth/forgot-password` — accepts `{ email }`. If the user exists, generate a reset token with a short expiry (15–60 minutes) and send an email containing the reset link. Always return a `200` response regardless of whether the email was found.
+- [ ] `POST /auth/reset-password` — accepts `{ token, new_password }`. Validate the token (signature, expiry, and that it has not already been used). If valid, hash the new password, update the user record, and invalidate the token. Return `400` for invalid, expired, **or already-used** tokens.
+- [ ] `POST /auth/change-password` — accepts `{ current_password, new_password }`. Requires a valid session token in the `Authorization` header. Verify the current password before updating. Return `400` if the current password is wrong.
+- [ ] Integrate one transactional email service (Resend or SendGrid) to send the reset email. The email must include the reset link and be readable on mobile.
+- [ ] Store the email service API key in an environment variable. Document which variable name to set in your `README` or `.env.example`.
+
+### Frontend
+
+- [ ] `/forgot-password` — email input form. On submit, call `POST /auth/forgot-password` and display a confirmation message ("If that address is registered, you'll receive a link shortly"). The form should be disabled after submission to prevent duplicate requests.
+- [ ] `/reset-password` — new password form with a confirmation field. Read the `token` from the URL query string. On submit, call `POST /auth/reset-password`. On success, redirect to `/login` with a success message. On failure (expired or invalid token), show a clear error and a link back to `/forgot-password`.
+- [ ] `/account/change-password` — form with current password, new password, and confirmation. Validates that the new password and confirmation match before calling the API.
+- [ ] Add a "Forgot your password?" link on the `/login` page pointing to `/forgot-password`.
+
+### Security
+
+- [ ] Reset tokens must expire and be invalidated after use — a token cannot be used twice.
+- [ ] The `/forgot-password` endpoint must always return `200`, never reveal whether an email is registered.
+- [ ] API keys must never appear in the codebase — use environment variables exclusively.
+
+---
+
+## 🚀 Going Further (optional)
+
+These are not evaluated but are valid extensions if time allows:
+
+- **HTML email template** — send a styled email instead of a plain-text link.
+- **Rate limiting** — limit the number of reset requests per email address per hour to prevent abuse.
+- **Audit log** — record each password reset event (timestamp, IP address) in the database.
+
+---
+
+## ✅ What We Will Evaluate
+
+- [ ] `POST /auth/forgot-password` sends a real email containing the reset link when called with a registered address.
+- [ ] `POST /auth/forgot-password` returns `200` even when the address is not registered — no information is leaked.
+- [ ] The reset token expires after the configured window and cannot be used after expiry.
+- [ ] `POST /auth/reset-password` updates the password and invalidates the token on success.
+- [ ] `POST /auth/reset-password` returns `400` for expired or already-used tokens.
+- [ ] `/forgot-password` shows a confirmation message after submission regardless of the result.
+- [ ] `/reset-password` reads the token from the URL, submits the form, and redirects to `/login` on success.
+- [ ] `/reset-password` shows a clear error with a link back to `/forgot-password` when the token is invalid or expired.
+- [ ] The `/login` page has a visible "Forgot your password?" link.
+- [ ] `/account/change-password` validates matching new password and confirmation, calls the API, and shows success or error feedback.
+- [ ] `POST /auth/change-password` rejects wrong current passwords with `400`.
+- [ ] No API keys are hardcoded — all secrets are loaded from environment variables.

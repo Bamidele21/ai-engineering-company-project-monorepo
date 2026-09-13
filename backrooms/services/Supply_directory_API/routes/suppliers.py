@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from database import get_db, get_suppliers_table
-from models import Supplier, SupplierCountry, SupplierStatus
+from services.Supply_directory_API.auth.dependencies import get_current_user
+from services.Supply_directory_API.database import get_db, get_suppliers_table
+from services.Supply_directory_API.models import AuthenticatedUser, Supplier, SupplierCountry, SupplierStatus
 
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
@@ -41,8 +42,17 @@ def _find_supplier_or_404(table, supplier_id: int):
 	return supplier
 
 
+def _require_supplier_writer(current_user: AuthenticatedUser) -> None:
+	if current_user.role not in {"admin", "manager"}:
+		raise HTTPException(status_code=403, detail="Supplier write access requires admin or manager role")
+
+
 @router.post("", response_model=SupplierRecord, status_code=201)
-def create_supplier(payload: Supplier):
+def create_supplier(
+	payload: Supplier,
+	current_user: AuthenticatedUser = Depends(get_current_user),
+):
+	_require_supplier_writer(current_user)
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		doc_id = table.insert(_as_storable(payload))
@@ -54,6 +64,7 @@ def create_supplier(payload: Supplier):
 def list_suppliers(
 	country: SupplierCountry | None = Query(default=None),
 	category: str | None = Query(default=None),
+	current_user: AuthenticatedUser = Depends(get_current_user),
 ):
 	with get_db() as db:
 		table = get_suppliers_table(db)
@@ -71,7 +82,10 @@ def list_suppliers(
 
 
 @router.get("/{supplier_id}", response_model=SupplierRecord)
-def get_supplier(supplier_id: int):
+def get_supplier(
+	supplier_id: int,
+	current_user: AuthenticatedUser = Depends(get_current_user),
+):
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		supplier = _find_supplier_or_404(table, supplier_id)
@@ -79,7 +93,12 @@ def get_supplier(supplier_id: int):
 
 
 @router.patch("/{supplier_id}/rate", response_model=SupplierRecord)
-def update_supplier_rate(supplier_id: int, payload: RateUpdatePayload):
+def update_supplier_rate(
+	supplier_id: int,
+	payload: RateUpdatePayload,
+	current_user: AuthenticatedUser = Depends(get_current_user),
+):
+	_require_supplier_writer(current_user)
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
@@ -97,7 +116,12 @@ def update_supplier_rate(supplier_id: int, payload: RateUpdatePayload):
 
 
 @router.patch("/{supplier_id}/status", response_model=SupplierRecord)
-def update_supplier_status(supplier_id: int, payload: StatusUpdatePayload):
+def update_supplier_status(
+	supplier_id: int,
+	payload: StatusUpdatePayload,
+	current_user: AuthenticatedUser = Depends(get_current_user),
+):
+	_require_supplier_writer(current_user)
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
@@ -108,7 +132,11 @@ def update_supplier_status(supplier_id: int, payload: StatusUpdatePayload):
 
 
 @router.delete("/{supplier_id}", status_code=200)
-def delete_supplier(supplier_id: int):
+def delete_supplier(
+	supplier_id: int,
+	current_user: AuthenticatedUser = Depends(get_current_user),
+):
+	_require_supplier_writer(current_user)
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)

@@ -18,6 +18,7 @@ SupplierCategory = Literal[
 SupplierCountry = Literal["Spain", "USA"]
 SupplierCurrency = Literal["EUR", "USD"]
 SupplierStatus = Literal["active", "suspended"]
+UserRole = Literal["admin", "manager", "user"]
 
 
 class Supplier(BaseModel):
@@ -42,3 +43,70 @@ class Supplier(BaseModel):
 				f"Suppliers in {self.country} must use {expected_currency}"
 			)
 		return self
+
+
+class User(BaseModel):
+	email: EmailStr
+	hashed_password: str
+	is_active: bool = True
+	role: UserRole = "user"
+	created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UserCreate(BaseModel):
+	email: EmailStr
+	password: str = Field(min_length=8)
+	name: str = ""
+	phone: str | None = None
+	address: str | None = None
+
+
+class UserUpdate(BaseModel):
+	email: EmailStr | None = None
+	password: str | None = Field(default=None, min_length=8)
+	role: UserRole | None = None
+	is_active: bool | None = None
+
+
+class UserResponse(BaseModel):
+	id: int
+	email: EmailStr
+	is_active: bool
+	role: UserRole
+	created_at: datetime
+
+
+class AuthenticatedUser(User):
+	id: int
+
+
+class Profile(BaseModel):
+	user_id: int
+	name: str = ""
+	phone: str | None = None
+	address: str | None = None
+
+
+class ProfileUpdate(BaseModel):
+	name: str = ""
+	phone: str | None = None
+	address: str | None = None
+
+
+class ProfileResponse(Profile):
+	id: int
+
+
+class UserWithProfile(UserResponse):
+	profile: ProfileResponse
+
+
+class LoginRequest(BaseModel):
+	email: EmailStr
+	password: str
+
+
+class TokenResponse(BaseModel):
+	access_token: str
+	token_type: str = "bearer"
+	expires_in: int

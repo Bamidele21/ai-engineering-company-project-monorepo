@@ -1,7 +1,7 @@
 from tinydb import Query
 
-from database import get_db, get_suppliers_table
-from models import Supplier
+from services.Supply_directory_API.database import get_db, get_suppliers_table
+from services.Supply_directory_API.models import Supplier
 
 
 SUPPLIERS_SEED = [

@@ -3,7 +3,10 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes.suppliers import router as suppliers_router
+from services.Supply_directory_API.routes.auth import router as auth_router
+from services.Supply_directory_API.routes.profiles import router as profiles_router
+from services.Supply_directory_API.routes.suppliers import router as suppliers_router
+from services.Supply_directory_API.routes.users import router as users_router
 
 
 app = FastAPI(title="Nexova Supplier Directory API")
@@ -26,6 +29,9 @@ app.add_middleware(
 )
 
 app.include_router(suppliers_router)
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(profiles_router)
 
 
 @app.get("/")
