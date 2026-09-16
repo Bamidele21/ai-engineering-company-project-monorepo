@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { authorizedFetch } from "@/lib/auth/client";
 
 type SupplierCountry = "Spain" | "USA";
 type SupplierStatus = "active" | "suspended";
@@ -171,7 +172,7 @@ export default function SuppliersPage() {
       }
 
       const query = params.toString();
-      const response = await fetch(
+      const response = await authorizedFetch(
         `${SUPPLIERS_API_URL}/suppliers${query ? `?${query}` : ""}`,
         { cache: "no-store" }
       );
@@ -253,7 +254,7 @@ export default function SuppliersPage() {
     };
 
     try {
-      const response = await fetch(`${SUPPLIERS_API_URL}/suppliers`, {
+      const response = await authorizedFetch(`${SUPPLIERS_API_URL}/suppliers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -298,7 +299,7 @@ export default function SuppliersPage() {
     setLoadError("");
 
     try {
-      const response = await fetch(
+      const response = await authorizedFetch(
         `${SUPPLIERS_API_URL}/suppliers/${supplier.id}/rate`,
         {
           method: "PATCH",
@@ -341,7 +342,7 @@ export default function SuppliersPage() {
     setLoadError("");
 
     try {
-      const response = await fetch(
+      const response = await authorizedFetch(
         `${SUPPLIERS_API_URL}/suppliers/${supplier.id}/status`,
         {
           method: "PATCH",

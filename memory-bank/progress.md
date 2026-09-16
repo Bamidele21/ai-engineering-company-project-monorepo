@@ -1,5 +1,42 @@
 # Progress
 
+# Sprint 2 Internal frontend authentication (2026-09-15)
+
+Scope changed:
+1. `uis/backoffice/lib/auth/` (new): `types.ts`, `storage.ts`, `client.ts`, `session.ts`.
+2. `uis/backoffice/components/auth/` (new): `AuthGuard.tsx`, `AccountBar.tsx`.
+3. `uis/backoffice/app/login/page.tsx`, `app/register/page.tsx`, `app/account/profile/page.tsx` (new).
+4. `uis/backoffice/app/layout.tsx`, `app/suppliers/page.tsx`, `.gitignore`, `.env.example`.
+5. `uis/talent-pipeline-tracker/lib/auth/` (new): `types.ts`, `storage.ts`, `client.ts`, `session.ts`.
+6. `uis/talent-pipeline-tracker/components/auth/` (new): `AuthGuard.tsx`, `AccountBar.tsx`.
+7. `uis/talent-pipeline-tracker/app/login/page.tsx`, `app/register/page.tsx`, `app/account/profile/page.tsx` (new).
+8. `uis/talent-pipeline-tracker/app/layout.tsx`, `lib/api/client.ts`, `.gitignore`, `.env.example`.
+
+What changed:
+1. Added app-local auth utilities to both internal apps: token storage in `localStorage` (`nexova.auth.token`), client-side JWT `exp` validity check, an authorized fetch wrapper that sets `Authorization: Bearer <token>`, and automatic session clearing plus `/login` redirect on any `401`.
+2. Added a client `AuthGuard` mounted in each root layout. It redirects unauthenticated users to `/login` (preserving a `next` return path) and treats `/login` and `/register` as public. Next.js middleware was deliberately not used, per AUTH-02.
+3. Added `AccountBar` (profile link + logout) rendered globally on authenticated views in both apps.
+4. Added `/login`, `/register`, and `/account/profile` routes to both apps. Registration submits `email`, `password`, and optional `name`/`phone`/`address` to `POST /users`, then immediately `POST /auth/login`, stores the token, and redirects to the authenticated home view. Registration shows field-level validation errors.
+5. Profile pages read `GET /auth/me` and display account email plus profile name/phone/address, saving changes through `PUT /profiles/me`.
+6. Backoffice supplier requests (`GET`/`POST`/`PATCH`) now go through the authorized wrapper. Tracker's shared API client attaches the token to `PROJECT_API_URL` requests and clears the session on `401`.
+7. Backoffice auth routes use the existing `NEXT_PUBLIC_SUPPLIERS_API_URL`. Tracker auth/profile routes use a new `NEXT_PUBLIC_AUTH_API_URL` (default `http://localhost:8000`), while `PROJECT_API_URL` continues to serve candidate records.
+8. Documented env variables in both `.env.example` files and added a `!.env.example` negation to both `.gitignore` files so the examples are committable.
+9. `uis/website` was left fully public and untouched.
+
+Validation performed:
+1. `npm run lint` inside `uis/backoffice` passed with zero errors and zero warnings.
+2. `npm run lint` inside `uis/talent-pipeline-tracker` passed with zero errors and zero warnings.
+3. `npm run build` inside `uis/backoffice` passed; generated `/`, `/account/profile`, `/incidents`, `/login`, `/register`, `/suppliers`.
+4. `npm run build` inside `uis/talent-pipeline-tracker` passed; generated `/`, `/account/profile`, `/candidates/new`, `/login`, `/register`, plus the dynamic `/candidates/[id]` and `/candidates/[id]/edit` routes.
+5. `git diff --check` passed (only a benign CRLF warning for `uis/talent-pipeline-tracker/lib/api/client.ts`).
+6. In-process FastAPI `TestClient` smoke test ran against an isolated temporary TinyDB and passed all 20 checks: register `201` with `user` role and no password leakage, short-password `422`, login `200` with bearer token, authorised `GET /auth/me` with linked profile, `PUT /profiles/me` persisted, protected `GET /suppliers` `401` without token and `200` with token, malformed and expired tokens `401`, duplicate registration `409`, wrong password `401`, CORS preflight allowed for `http://localhost:3000`, and cleanup delete `200` followed by token `401`. The tracked `suppliers_db.json` was not modified.
+
+Remaining risks / notes:
+1. Tokens are stored in `localStorage` as required by AUTH-02, so they are readable by any script on the origin; XSS exposure is inherent to that contract.
+2. `uis/talent-pipeline-tracker` now sends the Nexova JWT to its external `PROJECT_API_URL`. If that external API rejects the token with `401`, the shared client clears the session and redirects to `/login`. The external API must accept the JWT for protected record operations to work end-to-end.
+3. `uis/backoffice` incident analyzer routes are session-guarded in the UI, but the analyzer FastAPI endpoints have no JWT support, so those requests remain unauthenticated.
+4. Browser end-to-end checks (register, login, redirect, profile update, logout, expired token) still need a running supplier-directory API with `JWT_SECRET_KEY` configured and matching CORS origins.
+
 ## Supplier directory API CORS enablement (2026-08-30)
 
 Scope changed:
