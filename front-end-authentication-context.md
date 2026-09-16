@@ -1,0 +1,74 @@
+
+
+> #### AUTH-02 — Authentication flows and protected views in the frontend
+>
+> The API now requires a JWT token on protected routes. This task covers the frontend side of that contract:
+>
+> - **Login and registration views** — forms that call the API, receive the token, and store it correctly.
+> - **Account management views** — profile page.
+> - **Route protection** — any view that requires a session must redirect unauthenticated users to login. This applies to all applications in the monorepo **except the public website (Milestone 1)**, which remains fully public.
+>
+> The token must be stored in `localStorage` and attached to every protected API call via the `Authorization: Bearer` header. On logout, the token is removed and the user is redirected to login.
+>
+> Do not build a separate authentication app. Integrate these flows into the existing Next.js applications inside your monorepo.
+
+### Complementary knowledge: the frontend side of JWT
+
+Once the API returns a token at login, the frontend's job is: store it, send it, and react to its absence. The standard pattern in Next.js is:
+
+1. **Store** the token in `localStorage` after a successful login response.
+2. **Read** the token on every protected API call and set it in the `Authorization` header: `Bearer <token>`.
+3. **Protect routes** — use a **client** layout guard or custom hook that reads `localStorage` and redirects to `/login` if the token is absent. Next.js middleware runs on the server and **cannot** read `localStorage`; do not use middleware for this check unless you also store a cookie the middleware can see.
+4. **Clear** the token on logout and redirect.
+
+> **Note:** The temporary frontend breakage from the previous delivery ends here. By the end of this project, all protected views should be working end-to-end with real authentication.
+
+---
+
+## 🌱 How to Start the Project
+
+This project continues inside your existing monorepo. Work on the same branch or open a new one: `git switch -c feature/auth-frontend`.
+
+Make sure your API from the previous delivery is running and reachable from the frontend before you start.
+
+---
+
+## 💻 What You Need to Do
+
+### Authentication views
+
+- [ ] `/login` — email and password form. On success: store the token in `localStorage`, redirect to the main authenticated view. On failure: show a clear error message.
+- [ ] `/register` — registration form. On success: call `POST /users` (include optional profile fields), then `POST /auth/login` with the same credentials, store the token, and redirect. On failure: show field-level validation errors.
+
+### Account management views
+
+- [ ] `/account/profile` — displays the current user's email plus profile data (`name`, `phone`, `address`) from `GET /auth/me`. Allows editing name and contact fields via `PUT /profiles/me` with the token in the header.
+
+### Route protection
+
+- [ ] Identify every view in your Next.js applications (excluding the public website) that requires an authenticated session.
+- [ ] Implement a **client** protection mechanism (layout guard or custom hook) that checks for the token in `localStorage` and redirects to `/login` if it is absent or invalid. Do not use Next.js middleware for this unless the token is also in a cookie the middleware can read.
+- [ ] Ensure the public website (Milestone 1) is entirely unaffected — no token check, no redirect.
+
+### Token lifecycle
+
+- [ ] On login and registration: store the token in `localStorage`.
+- [ ] On every protected API call: read the token and attach it as `Authorization: Bearer <token>`.
+- [ ] On logout: remove the token from `localStorage` and redirect to `/login`.
+- [ ] If a protected API call returns `401`: clear the token and redirect to `/login`.
+
+---
+
+## ✅ What We Will Evaluate
+
+- [ ] Login and registration forms work end-to-end: the token is stored after a successful call.
+- [ ] Protected views redirect to `/login` when there is no valid token in storage.
+- [ ] The public website (Milestone 1) continues to work without any authentication check.
+- [ ] The profile view displays email from `User` and name/contact data from the linked `Profile`, and updates profile fields via `PUT /profiles/me`.
+- [ ] Logout removes the token and redirects correctly.
+- [ ] A `401` response from any protected API call clears the session and redirects to `/login`.
+
+---
+
+
+

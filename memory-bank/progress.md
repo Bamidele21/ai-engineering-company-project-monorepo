@@ -16,6 +16,42 @@ Validation performed:
 Remaining risks / notes:
 1. If the frontend runs on a different origin, it must be included in `SUPPLIERS_ALLOWED_ORIGINS` before launching the API.
 
+# Sprint 1 API authentication (2026-09-12)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/models.py`
+2. `backrooms/services/Supply_directory_API/database.py`
+3. `backrooms/services/Supply_directory_API/auth/`
+4. `backrooms/services/Supply_directory_API/routes/auth.py`
+5. `backrooms/services/Supply_directory_API/routes/users.py`
+6. `backrooms/services/Supply_directory_API/routes/profiles.py`
+7. `backrooms/services/Supply_directory_API/routes/suppliers.py`
+8. `backrooms/services/Supply_directory_API/main.py`
+9. `backrooms/services/Supply_directory_API/.env.example`
+10. `backrooms/services/pyproject.toml`
+
+What changed:
+1. Added TinyDB-backed users and profiles with role validation for `admin`, `manager`, and `user`.
+2. Added bcrypt password hashing, configurable JWT signing/expiry, bearer-token decoding, and reusable `get_current_user` dependency.
+3. Added full user routes under `/users`, authentication routes under `/auth`, and profile routes under `/profiles`.
+4. Added owner/admin authorization for individual user credentials, admin-only role changes, linked profile deletion, and profile ownership through `/profiles/me`.
+5. Protected all six supplier routes. Authenticated users can read; only admins and managers can create, update, or delete supplier records.
+6. Added non-secret JWT and CORS configuration documentation in `.env.example`.
+
+Validation performed:
+1. `uv run python -m py_compile` passed for all changed API, auth, and route modules.
+2. `uv sync --project backrooms/services` completed and runtime imports for `passlib` and `jose` passed.
+3. OpenAPI inspection confirmed `/users`, `/auth`, `/profiles/me`, and all supplier routes are mounted.
+4. `PYTHONPATH=.. uv run python -m services.Supply_directory_API.routes.seed` passed with `Inserted records: 0`.
+5. Bcrypt/JWT primitive smoke test passed, including token subject decoding.
+6. HTTP smoke test passed for registration, login, profile update, unauthenticated `401`, malformed-token `401`, and cleanup.
+7. Authorization/expiry smoke test passed for cross-user `403`, regular-user supplier write denial, authenticated supplier reads, and expired-token `401`.
+8. `git diff --check` passed.
+
+Remaining risks / notes:
+1. Editor diagnostics may report `passlib` and `jose` as unresolved when Pylance is pointed at a different interpreter; the synchronized service interpreter imports both successfully.
+2. HTTP tests required ephemeral `httpx2` because the installed Starlette TestClient expects that optional package; it was supplied with `uv run --with httpx2` without changing project metadata.
+3. TinyDB user/profile creation uses compensating cleanup if profile insertion fails; TinyDB does not provide a multi-table transaction.
 
 ## Backoffice supplier directory route (2026-08-30)
 
