@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { logout } from "@/lib/auth/session";
 import { hasValidSession } from "@/lib/auth/storage";
 
-const HIDDEN_PATHS = ["/login", "/register"];
+const HIDDEN_PATHS = ["/login", "/register", "/forgot-password", "/reset-password"];
 
 export function AccountBar() {
   const pathname = usePathname();
