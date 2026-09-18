@@ -110,3 +110,29 @@ class TokenResponse(BaseModel):
 	access_token: str
 	token_type: str = "bearer"
 	expires_in: int
+
+
+class ForgotPasswordRequest(BaseModel):
+	email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+	token: str
+	new_password: str = Field(min_length=8)
+
+
+class ChangePasswordRequest(BaseModel):
+	current_password: str
+	new_password: str = Field(min_length=8)
+
+
+class MessageResponse(BaseModel):
+	detail: str
+
+
+class PasswordResetToken(BaseModel):
+	jti: str
+	user_id: int
+	issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+	expires_at: datetime
+	used: bool = False
