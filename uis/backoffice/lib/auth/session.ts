@@ -1,9 +1,12 @@
 import { AUTH_API_URL, authorizedFetch } from "./client";
 import { clearToken, setToken } from "./storage";
 import type {
+  ChangePasswordPayload,
+  ForgotPasswordPayload,
   Profile,
   ProfileUpdatePayload,
   RegisterPayload,
+  ResetPasswordPayload,
   TokenResponse,
   UserWithProfile,
 } from "./types";
@@ -114,4 +117,69 @@ export async function saveProfile(
   }
 
   return (await response.json()) as Profile;
+}
+
+export async function requestPasswordReset(
+  payload: ForgotPasswordPayload
+): Promise<void> {
+  const response = await fetch(`${AUTH_API_URL}/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const errorPayload = await readJson(response);
+    throw new Error(
+      parseApiError(errorPayload, "Unable to request a password reset.")
+    );
+  }
+}
+
+export async function resetPassword(
+  payload: ResetPasswordPayload
+): Promise<void> {
+  const response = await fetch(`${AUTH_API_URL}/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      token: payload.token,
+      new_password: payload.newPassword,
+    }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const errorPayload = await readJson(response);
+    throw new Error(
+      parseApiError(
+        errorPayload,
+        "This reset link is invalid or has expired. Request a new one."
+      )
+    );
+  }
+}
+
+export async function changePassword(
+  payload: ChangePasswordPayload
+): Promise<void> {
+  const response = await authorizedFetch(
+    `${AUTH_API_URL}/auth/change-password`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        current_password: payload.currentPassword,
+        new_password: payload.newPassword,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorPayload = await readJson(response);
+    throw new Error(
+      parseApiError(errorPayload, "Unable to change your password.")
+    );
+  }
 }

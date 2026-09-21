@@ -14,6 +14,8 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const resetSuccess = searchParams.get("reset") === "success";
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
@@ -53,6 +55,15 @@ function LoginForm() {
           Authenticate with your Nexova account to manage applicant records.
         </p>
 
+        {resetSuccess ? (
+          <p
+            className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700"
+            role="status"
+          >
+            Your password has been updated. Sign in with your new password.
+          </p>
+        ) : null}
+
         <form className="mt-6 grid gap-4" onSubmit={handleSubmit} noValidate>
           <label className="grid gap-1.5 text-sm font-medium text-slate-700">
             Work email
@@ -77,6 +88,13 @@ function LoginForm() {
               required
             />
           </label>
+
+          <Link
+            href="/forgot-password"
+            className="-mt-2 justify-self-end text-xs font-medium text-slate-900 hover:text-slate-700"
+          >
+            Forgot your password?
+          </Link>
 
           {error ? (
             <p

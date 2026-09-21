@@ -1,5 +1,47 @@
 # Progress
 
+# Sprint 3 Password recovery, change, and release readiness (2026-09-16)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/models.py`
+2. `backrooms/services/Supply_directory_API/database.py`
+3. `backrooms/services/Supply_directory_API/auth/security.py`
+4. `backrooms/services/Supply_directory_API/auth/services.py`
+5. `backrooms/services/Supply_directory_API/auth/email.py` (new)
+6. `backrooms/services/Supply_directory_API/routes/auth.py`
+7. `backrooms/services/Supply_directory_API/tests/test_password_recovery.py` (new) + `tests/__init__.py`
+8. `backrooms/services/Supply_directory_API/.env.example`, `backrooms/services/pyproject.toml`, `backrooms/services/uv.lock`
+9. `uis/backoffice/lib/auth/{types,session}.ts`, `app/{login,forgot-password,reset-password,account/change-password}/page.tsx`, `components/auth/{AuthGuard,AccountBar}.tsx`
+10. `uis/talent-pipeline-tracker/lib/auth/{types,session}.ts`, `app/{login,forgot-password,reset-password,account/change-password}/page.tsx`, `components/auth/{AuthGuard,AccountBar}.tsx`
+11. Root `.gitignore`
+
+What changed:
+1. Added `POST /auth/forgot-password`. It always returns `200` with a generic message whether or not the address is registered, so it cannot be used to enumerate accounts. A reset email is only generated for existing active users.
+2. Added `POST /auth/reset-password`. It decodes a dedicated reset JWT (`type="password_reset"`, `sub`, `exp`, `jti`), verifies the persisted TokenState is unused and unexpired, marks it used, and only then writes the new bcrypt hash. Invalid, expired, malformed, wrong-type, and already-used tokens all return `400`.
+3. Added `POST /auth/change-password`. It requires a bearer session and returns `400` when the current password is wrong, otherwise stores a new bcrypt hash.
+4. Introduced a separate TinyDB file for reset-token state (`password_resets_db.json`) so the tracked `suppliers_db.json` seed data is never dirtied at runtime. The file is gitignored.
+5. Reset-token expiry is configurable through `PASSWORD_RESET_EXPIRY_MINUTES` and validated to the required 15-60 minute window.
+6. Integrated Resend through `auth/email.py` using env-only credentials (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`). The message includes a styled, mobile-readable HTML body plus a plain-text fallback and the reset link built from `PASSWORD_RESET_URL`.
+7. Added the three frontend routes to both internal apps with per-app wording: `/forgot-password` (disables the form after submission and shows the generic confirmation), `/reset-password` (reads `?token=`, validates matching passwords, redirects to `/login?reset=success`, and shows an error plus a link back to forgot-password on failure), and `/account/change-password` (guarded, validates match, shows success or error).
+8. Added a visible "Forgot your password?" link to both login pages plus a reset-success banner driven by the `reset=success` query parameter.
+9. Made `/forgot-password` and `/reset-password` public in both `AuthGuard` components and hidden from `AccountBar`.
+10. Documented every Sprint 3 environment variable in the service `.env.example`. `.env`, `password_resets_db.json`, `__pycache__/`, and `*.pyc` are excluded from version control.
+
+Validation performed:
+1. `uv run python -m py_compile` passed for all changed backend modules.
+2. `uv run python Supply_directory_API/tests/test_password_recovery.py` passed all 19 checks against an isolated temporary TinyDB with the Resend call stubbed: registration, unknown-address `200` with no send, known-address `200` with one send, 15-60 minute expiry, access-token-as-reset-token rejection, successful reset, old-password rejection, new-password login, single-use replay `400`, expired-token `400`, malformed-token `400`, unauthenticated `401`, wrong-current-password `400`, successful change, and bcrypt (non-plaintext) storage.
+3. Live Resend send succeeded from the service context (`onboarding@resend.dev` -> `delivered@resend.dev`), confirming the API key, sender, and HTML/text payload are accepted.
+4. `npm run lint` and `npm run build` passed in `uis/backoffice` and `uis/talent-pipeline-tracker`. Both builds emit `/forgot-password`, `/reset-password`, and `/account/change-password`.
+5. `git diff --check` passed (only benign CRLF notices).
+6. Confirmed `suppliers_db.json` is unmodified, `password_resets_db.json` is not created in the repo by the test run, and `.env` remains untracked.
+
+Remaining risks / notes:
+1. The Resend sandbox sender (`onboarding@resend.dev`) only delivers to the account owner's inbox. Sending to arbitrary recipients in a real evaluation requires a domain-verified sender in `RESEND_FROM_EMAIL`.
+2. The service `.env` originally contained a typo (`onboarding@resend.com`); it was corrected to `onboarding@resend.dev` in this session with developer approval to edit the protected `.env`.
+3. TinyDB has no transactions. Reset consumption marks the token used before the password write; a crash between the two leaves a spent token with the old password, which is an acceptable failure mode because the user can request a fresh link.
+4. Pre-existing tracked `__pycache__/*.pyc` files remain in version control. They were restored to avoid diff noise, and new `__pycache__/` and `*.pyc` entries were added to `.gitignore`; fully untracking the existing files is a separate cleanup that needs approval.
+5. Browser end-to-end verification (forgot -> email link -> reset -> new login -> change password) still needs a running API with the corrected `.env` and a real recipient address.
+
 # Sprint 2 Internal frontend authentication (2026-09-15)
 
 Scope changed:
