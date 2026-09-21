@@ -1,5 +1,39 @@
 # Progress
 
+# Error handling LOW-severity remediation (2026-09-21)
+
+Scope changed:
+1. `backrooms/services/APIs/analyzer-api.py`
+2. `backrooms/services/Supply_directory_API/auth/services.py`
+3. `backrooms/services/Supply_directory_API/routes/{auth,profiles,suppliers}.py`
+4. `scripts/src/sample-usage.ts`
+5. `uis/backoffice/app/page.tsx`, `app/incidents/page.tsx`, `app/suppliers/page.tsx`, `app/account/profile/page.tsx`
+6. `uis/talent-pipeline-tracker/lib/api/notes.ts`, `app/page.tsx`, `app/candidates/[id]/page.tsx`, `app/candidates/[id]/edit/page.tsx`
+
+What changed:
+1. LOW-1 (`analyzer-api.py`): upload read now happens inside `try/except` (client disconnect/IO → clean `400`) and enforces a 10 MB limit via `file.read(MAX_UPLOAD_BYTES + 1)` → `413` for oversized files.
+2. LOW-2 (`auth/email.py`): already resolved in the HIGH pass (SDK send wrapped in `EmailDeliveryError`); no change needed.
+3. LOW-3 (`auth/services.py`): the compensating rollback in `create_user` now catches `(OSError, ValueError)` instead of the broad `except Exception`, so only file-I/O/validation failures trigger cleanup.
+4. LOW-4 (`routes/profiles.py`): `update_profile`'s "Profile disappeared while updating" `RuntimeError` is caught at the route and mapped to a logged `500` with a generic message.
+5. LOW-5 (`routes/suppliers.py`): added `_get_after_write` helper that re-reads a row after `insert`/`update` and raises a logged `500` (instead of an unhandled `TypeError`) when the row is unexpectedly missing; used by create, rate-update, and status-update.
+6. LOW-6 (`routes/auth.py`): login now catches `ValueError` from `verify_password` (corrupt/malformed stored hash), logs the data-integrity issue, and returns `401` instead of a `500`.
+7. LOW-7: added "Try again" buttons that re-invoke the load function on load-error states in the backoffice profile and suppliers pages, and the tracker list, candidate detail (candidate + notes), and edit pages. Loaders were extracted into `useCallback` so the retry button and effect share the same function; files gained the `/* eslint-disable react-hooks/set-state-in-effect */` directive (matching the existing suppliers page convention).
+8. LOW-8 (`lib/auth/storage.ts`): no action — the silent `localStorage` catches are documented and deliberate.
+9. LOW-9 (`lib/api/notes.ts`): `normalizeNotes` now throws `"Received an unexpected notes response."` instead of returning `[]`, so a malformed payload surfaces the existing notes error state rather than a false "No internal notes yet."
+10. LOW-10 (`app/incidents/page.tsx`): the "Download results ↓" link is only rendered after a local analysis completes (`{analysis ? <a …> : null}`), removing the fresh-load `404`/raw-JSON path.
+11. LOW-11 (`scripts/src/sample-usage.ts` + `uis/backoffice/app/page.tsx`): `sampleUsageResults` is computed inside a `try/catch` (returns `null` on failure and logs to console), and the backoffice overview guards against `null` with a friendly error panel instead of crashing the whole dashboard.
+
+Validation performed:
+1. `uv run python -m py_compile` passed for `auth/services.py`, `routes/{auth,profiles,suppliers}.py`, and `APIs/analyzer-api.py`.
+2. `uv run --with httpx2 python Supply_directory_API/tests/test_password_recovery.py` passed 19/19 (unchanged).
+3. `npm run lint` and `npm run build` passed in both `uis/backoffice` and `uis/talent-pipeline-tracker`.
+4. `git diff --check` passed (only benign LF→CRLF notices); recompiled tracked `__pycache__/*.pyc` files restored.
+
+Remaining risks / notes:
+1. LOW-1 adds a 10 MB upload cap (returning `413`); the incidents frontend does not yet special-case `413`, so it renders the generic analyzer error text. Acceptable for this pass.
+2. The React Compiler lint rule (`react-hooks/set-state-in-effect`) required the same file-level disable directive already used by `suppliers/page.tsx`; the data-fetching pattern itself is unchanged from the original code.
+3. The audit's "Observations outside the 8 categories" (shared `_last_metrics` across users, unauthenticated export, un-debounced search) remain open for a separate pass.
+
 # Error handling MEDIUM-severity remediation (2026-09-21)
 
 Scope changed:

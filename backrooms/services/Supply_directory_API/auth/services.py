@@ -67,7 +67,7 @@ def create_user(db: TinyDB, payload: UserCreate) -> int:
 			address=payload.address,
 		)
 		profiles_table.insert(profile.model_dump())
-	except Exception:
+	except (OSError, ValueError):
 		users_table.remove(doc_ids=[user_id])
 		raise
 	return user_id

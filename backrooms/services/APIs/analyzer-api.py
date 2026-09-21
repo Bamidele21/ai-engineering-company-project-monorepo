@@ -31,6 +31,7 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 _last_metrics: dict[str, Any] | None = None
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def _json_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +70,21 @@ async def analyze_incidents(file: UploadFile = File(...)) -> dict[str, Any]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="A CSV file is required.")
 
-    content = await file.read()
+    try:
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+    except Exception as error:
+        logger.exception("Failed to read the uploaded incident CSV")
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file could not be read.",
+        ) from error
+
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="The uploaded file is too large. The maximum size is 10 MB.",
+        )
+
     if not content.strip():
         raise HTTPException(status_code=400, detail="The uploaded CSV file is empty.")
 

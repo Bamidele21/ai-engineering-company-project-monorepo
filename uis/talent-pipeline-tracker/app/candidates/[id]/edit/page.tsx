@@ -1,7 +1,8 @@
 "use client";
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CandidateForm } from "@/components/candidates/CandidateForm";
 import { getRecordById, replaceRecord } from "@/lib/api/candidates";
@@ -15,28 +16,28 @@ export default function EditCandidatePage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>("");
 
-  useEffect(() => {
+  const loadRecord = useCallback(async () => {
     if (!candidateId) {
       return;
     }
 
-    const loadRecord = async () => {
-      setLoading(true);
-      setError("");
+    setLoading(true);
+    setError("");
 
-      try {
-        const candidate = await getRecordById(candidateId);
-        setRecord(candidate);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to load candidate for edit.";
-        setError(message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadRecord();
+    try {
+      const candidate = await getRecordById(candidateId);
+      setRecord(candidate);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load candidate for edit.";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
   }, [candidateId]);
+
+  useEffect(() => {
+    void loadRecord();
+  }, [loadRecord]);
 
   const handleUpdateCandidate = async (payload: CandidateUpsertPayload) => {
     return replaceRecord(candidateId, payload);
@@ -76,7 +77,16 @@ export default function EditCandidatePage() {
         ) : null}
 
         {!loading && error ? (
-          <section className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</section>
+          <section className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+            <p>{error}</p>
+            <button
+              type="button"
+              onClick={() => void loadRecord()}
+              className="mt-3 rounded-md border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100"
+            >
+              Try again
+            </button>
+          </section>
         ) : null}
 
         {!loading && !error && record ? (

@@ -70,7 +70,13 @@ def login(payload: LoginRequest) -> TokenResponse:
 			headers={"WWW-Authenticate": "Bearer"},
 		)
 	user_id, user = user_entry
-	if not user.is_active or not verify_password(payload.password, user.hashed_password):
+	try:
+		password_ok = verify_password(payload.password, user.hashed_password)
+	except ValueError:
+		logger.error("Corrupt password hash for user %s; rejecting login", user_id)
+		password_ok = False
+
+	if not user.is_active or not password_ok:
 		raise HTTPException(
 			status_code=status.HTTP_401_UNAUTHORIZED,
 			detail="Incorrect email or password",
