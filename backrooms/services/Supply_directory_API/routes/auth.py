@@ -109,7 +109,16 @@ def forgot_password(payload: ForgotPasswordRequest) -> MessageResponse:
 	with get_db() as db:
 		user_entry = get_user_entry_by_email(db, str(payload.email))
 	if user_entry is not None and user_entry[1].is_active:
-		token, expires_in = create_password_reset(user_entry[0])
+		try:
+			token, expires_in = create_password_reset(user_entry[0])
+		except (RuntimeError, ValueError):
+			logger.error(
+				"Password reset token could not be created due to a configuration error"
+			)
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail=EMAIL_UNAVAILABLE_MESSAGE,
+			)
 
 	if token is not None:
 		try:

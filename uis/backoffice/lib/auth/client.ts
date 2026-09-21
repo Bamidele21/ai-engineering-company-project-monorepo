@@ -44,11 +44,18 @@ export async function authorizedFetch(
   url: string,
   init: RequestInit = {}
 ): Promise<Response> {
-  const response = await fetch(url, {
-    ...init,
-    headers: buildHeaders(init),
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: buildHeaders(init),
+      cache: "no-store",
+    });
+  } catch {
+    throw new Error(
+      "Network error — unable to reach the server. Please check your connection and try again."
+    );
+  }
 
   if (response.status === 401) {
     redirectToLogin();

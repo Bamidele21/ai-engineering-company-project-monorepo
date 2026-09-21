@@ -1,5 +1,41 @@
 # Progress
 
+# Error handling MEDIUM-severity remediation (2026-09-21)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/auth/security.py`
+2. `backrooms/services/Supply_directory_API/routes/auth.py`
+3. `scripts/CSV_analyzer/analyze.py`
+4. `uis/backoffice/lib/auth/client.ts`, `uis/backoffice/lib/auth/session.ts`
+5. `uis/talent-pipeline-tracker/lib/auth/client.ts`, `uis/talent-pipeline-tracker/lib/auth/session.ts`
+
+What changed (MED-1 — unguarded JWT env parsing):
+1. `auth/security.py` now parses and validates `JWT_EXPIRY_MINUTES` and `PASSWORD_RESET_EXPIRY_MINUTES` once at import via a `_read_int_env` helper that raises a clear `RuntimeError` (e.g. "JWT_EXPIRY_MINUTES must be an integer, got 'abc'"; "PASSWORD_RESET_EXPIRY_MINUTES must be at least 15, got 5") instead of a raw `ValueError`/`RuntimeError` mid-request.
+2. `token_expiry_minutes()` and `password_reset_expiry_minutes()` now return the precomputed, validated constants, so no per-request parse/validation can 500 the login or reset flows.
+3. `routes/auth.py` wraps the `create_password_reset` call in `try/except (RuntimeError, ValueError)` mapping to `503` with alerting, so a config problem after the user lookup no longer surfaces as a 500 the UI used to swallow.
+
+What changed (MED-2 — raw network errors shown to users):
+1. `authorizedFetch` in both `lib/auth/client.ts` files and a new `request` helper in both `lib/auth/session.ts` files wrap `fetch` in `try/catch` and rethrow a friendly "Network error — unable to reach the server. Please check your connection and try again." instead of the browser's raw `TypeError: Failed to fetch`/DNS message. Parsed API `detail` is still preserved for non-2xx responses. All four unauthenticated calls (login, register, forgot-password, reset-password) now go through `request`; authorized calls (me, profile, change-password) are covered by `authorizedFetch`.
+
+What changed (MED-3 — CSV analyzer CLI traceback):
+1. `scripts/CSV_analyzer/analyze.py` catches `EOFError` around `input()` (closed stdin/CI/automation) and skips the export prompt, and wraps `export_results` in `try/except OSError` writing a message to stderr and returning exit code 1 (the analysis itself already succeeded).
+
+What changed (MED-4 — PII/token leak into logs):
+1. Already resolved in the HIGH pass: the reset send failure is logged with a sanitized `logger.error("... failed for an active account")` and no exception object/recipient/URL/token. Verified no `logger.exception` remains in the Supply Directory service.
+
+Validation performed:
+1. `uv run python -m py_compile` passed for `auth/security.py` and `routes/auth.py`.
+2. `uv run --with httpx2 python Supply_directory_API/tests/test_password_recovery.py` passed 19/19.
+3. Fail-fast checks confirmed clear `RuntimeError` messages for non-numeric `JWT_EXPIRY_MINUTES` and out-of-range `PASSWORD_RESET_EXPIRY_MINUTES`.
+4. `python -m py_compile analyze.py` passed; `python analyze.py incidents-nexova.csv < /dev/null` exited `0` with no traceback (EOFError handled).
+5. `npm run lint` and `npm run build` passed in both `uis/backoffice` and `uis/talent-pipeline-tracker`.
+6. `git diff --check` passed (only benign LF→CRLF notices); recompiled tracked `__pycache__/*.pyc` files restored.
+
+Remaining risks / notes:
+1. MED-1 validates config at import; a deliberately malformed `JWT_EXPIRY_MINUTES`/`PASSWORD_RESET_EXPIRY_MINUTES` now fails the whole service at startup with a clear message rather than returning 500s per request — the intended fail-fast behavior.
+2. The friendly network-error wrapper was applied to the auth layer only. The tracker candidate client (`lib/api/client.ts`) still lets a raw `TypeError` propagate from `fetch`; wrapping it is a candidate follow-up (noted in the audit's broader network-error theme but outside the listed MEDIUM items).
+3. Remaining LOW-severity findings (upload size limit, retry CTAs, notes parse fallback, export download handling, sample-usage error boundary) are intentionally deferred.
+
 # Error handling HIGH-severity remediation (2026-09-20)
 
 Scope changed:

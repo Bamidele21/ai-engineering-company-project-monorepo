@@ -9,11 +9,33 @@ from passlib.hash import bcrypt
 
 
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-DEFAULT_EXPIRY_MINUTES = int(os.getenv("JWT_EXPIRY_MINUTES", "30"))
-DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES = int(
-	os.getenv("PASSWORD_RESET_EXPIRY_MINUTES", "30")
-)
 PASSWORD_RESET_TOKEN_TYPE = "password_reset"
+
+
+def _read_int_env(
+	name: str,
+	default: int,
+	minimum: int | None = None,
+	maximum: int | None = None,
+) -> int:
+	"""Parse an integer env variable once, failing fast with a clear message."""
+	raw = os.getenv(name, str(default))
+	try:
+		value = int(raw)
+	except ValueError as error:
+		raise RuntimeError(f"{name} must be an integer, got {raw!r}") from error
+
+	if minimum is not None and value < minimum:
+		raise RuntimeError(f"{name} must be at least {minimum}, got {value}")
+	if maximum is not None and value > maximum:
+		raise RuntimeError(f"{name} must be at most {maximum}, got {value}")
+	return value
+
+
+DEFAULT_EXPIRY_MINUTES = _read_int_env("JWT_EXPIRY_MINUTES", 30)
+DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES = _read_int_env(
+	"PASSWORD_RESET_EXPIRY_MINUTES", 30, minimum=15, maximum=60
+)
 
 
 def _jwt_secret() -> str:
@@ -24,7 +46,7 @@ def _jwt_secret() -> str:
 
 
 def token_expiry_minutes() -> int:
-	return int(os.getenv("JWT_EXPIRY_MINUTES", str(DEFAULT_EXPIRY_MINUTES)))
+	return DEFAULT_EXPIRY_MINUTES
 
 
 def hash_password(password: str) -> str:
@@ -54,15 +76,7 @@ def decode_access_token(token: str) -> int:
 
 
 def password_reset_expiry_minutes() -> int:
-	value = int(
-		os.getenv(
-			"PASSWORD_RESET_EXPIRY_MINUTES",
-			str(DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES),
-		)
-	)
-	if value < 15 or value > 60:
-		raise RuntimeError("PASSWORD_RESET_EXPIRY_MINUTES must be between 15 and 60")
-	return value
+	return DEFAULT_PASSWORD_RESET_EXPIRY_MINUTES
 
 
 def create_password_reset_token(user_id: int) -> tuple[str, str, int]:
