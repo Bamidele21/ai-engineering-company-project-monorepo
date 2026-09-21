@@ -2,7 +2,8 @@
 
 Runs against an isolated temporary TinyDB so the tracked ``suppliers_db.json``
 and the local ``password_resets_db.json`` are never touched. The Resend call is
-stubbed, so no real email is sent and no API key is required.
+stubbed, so no real email is sent; a dummy ``RESEND_API_KEY`` satisfies the
+route's configuration pre-check without contacting the provider.
 
 Run from ``backrooms/services``::
 
@@ -20,6 +21,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-for-password-recovery")
 os.environ.setdefault("JWT_EXPIRY_MINUTES", "30")
 os.environ.setdefault("PASSWORD_RESET_EXPIRY_MINUTES", "30")
 os.environ.setdefault("PASSWORD_RESET_URL", "http://localhost:3000/reset-password")
+os.environ.setdefault("RESEND_API_KEY", "test-api-key-for-password-recovery")
 
 BACKROOMS_ROOT = Path(__file__).resolve().parents[3]
 if str(BACKROOMS_ROOT) not in sys.path:

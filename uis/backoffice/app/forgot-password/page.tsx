@@ -23,11 +23,14 @@ export default function ForgotPasswordPage() {
 
     try {
       await requestPasswordReset({ email: email.trim() });
+      setIsSubmitted(true);
     } catch {
-      // Always show the same confirmation to avoid leaking whether the address exists.
+      // Only a completed 200 confirms the request was accepted. Network and
+      // server failures show a generic retry message that reveals nothing
+      // about whether the address is registered.
+      setError("Something went wrong — please try again.");
     } finally {
       setIsSubmitting(false);
-      setIsSubmitted(true);
     }
   };
 

@@ -1,5 +1,40 @@
 # Progress
 
+# Error handling HIGH-severity remediation (2026-09-20)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/auth/email.py`
+2. `backrooms/services/Supply_directory_API/routes/auth.py`
+3. `backrooms/services/Supply_directory_API/tests/test_password_recovery.py`
+4. `backrooms/services/APIs/analyzer-api.py`
+5. `uis/backoffice/app/forgot-password/page.tsx`
+6. `uis/talent-pipeline-tracker/app/forgot-password/page.tsx`
+7. `uis/talent-pipeline-tracker/lib/api/client.ts`
+
+What changed (HIGH-1 — silent password-reset failures):
+1. `auth/email.py` now exposes typed `EmailConfigurationError` and `EmailDeliveryError`, plus `is_email_delivery_configured()`.
+2. `send_password_reset_email` raises `EmailConfigurationError` for a missing `RESEND_API_KEY` and wraps provider failures in `EmailDeliveryError` instead of leaking the raw SDK exception.
+3. `routes/auth.py` checks `is_email_delivery_configured()` **before** the user lookup, so a misconfigured service returns `503` for every address (no enumeration) instead of silently returning `200`.
+4. The broad `except Exception` around the send is gone. `EmailConfigurationError` maps to `503`; `EmailDeliveryError` is logged with a sanitized message (no recipient, reset URL, or token) while still returning the generic `200` so delivery failures cannot be used to enumerate registered accounts. This also removes the PII/token traceback leak flagged as MED-4.
+5. Both forgot-password pages now set the confirmation only on a resolved (2xx) request and show a neutral "Something went wrong — please try again." on network or server failure, so users are no longer told an email was sent when the request failed.
+
+What changed (HIGH-2 — raw API bodies rendered in the tracker UI):
+1. `uis/talent-pipeline-tracker/lib/api/client.ts` parses FastAPI `detail` (string or validation array) into a friendly message, falls back to `Request failed with status <code>` for non-JSON/HTML bodies, and logs the raw body to the console instead of throwing it into React error state.
+
+What changed (HIGH-3 — raw exception/temp-path in analyzer detail):
+1. `backrooms/services/APIs/analyzer-api.py` logs the real exception with `logger.exception` server-side and returns the fixed client-safe `400` detail "The uploaded file is not a valid CSV.", removing the interpolated `OSError` temp-file path.
+
+Validation performed:
+1. `uv run python -m py_compile` passed for `routes/auth.py`, `auth/email.py`, and `APIs/analyzer-api.py`.
+2. `uv run --with httpx2 python Supply_directory_API/tests/test_password_recovery.py` passed 19/19 checks (unknown-address `200`, known-address send, expiry, single-use, malformed/expired/type-confusion `400`, change-password, bcrypt storage). The test now sets a dummy `RESEND_API_KEY` to satisfy the new configuration pre-check while still stubbing the sender.
+3. `npm run lint` and `npm run build` passed in `uis/talent-pipeline-tracker`; `npm run lint` and `npm run build` passed in `uis/backoffice`.
+4. `git diff --check` passed (only benign LF→CRLF notices); the inadvertently recompiled tracked `__pycache__/auth.cpython-313.pyc` was restored.
+
+Remaining risks / notes:
+1. Per the audit's stated tradeoff, a genuine provider send failure still returns `200` to avoid account enumeration; the alerting hook is the sanitized `logger.error`, so a delivery outage is visible in logs rather than to the user.
+2. MED-1 (unguarded env parsing at startup / per request) and MED-2 (raw network errors in `lib/auth/session.ts`) remain open; they were intentionally out of scope for the HIGH-only pass.
+3. `parseApiError` is now duplicated between `lib/api/client.ts` and `lib/auth/session.ts`; extracting a shared helper is a candidate for the MEDIUM hardening sprint.
+
 # Error handling audit (2026-09-19)
 
 Scope audited:

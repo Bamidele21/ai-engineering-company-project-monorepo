@@ -9,6 +9,48 @@ function assertApiBaseUrl() {
   }
 }
 
+interface ApiErrorPayload {
+  detail?: string | Array<{ msg?: string }>;
+}
+
+function parseApiErrorBody(body: string, status: number): string {
+  const fallback = `Request failed with status ${status}`;
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return fallback;
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return fallback;
+  }
+
+  const errorPayload = payload as ApiErrorPayload;
+  if (typeof errorPayload.detail === "string" && errorPayload.detail.trim()) {
+    return errorPayload.detail;
+  }
+
+  if (Array.isArray(errorPayload.detail)) {
+    const messages = errorPayload.detail
+      .map((entry) => entry.msg)
+      .filter((entry): entry is string => Boolean(entry));
+
+    if (messages.length > 0) {
+      return messages.join(". ");
+    }
+  }
+
+  return fallback;
+}
+
+async function throwApiError(response: Response): Promise<never> {
+  const rawBody = await response.text();
+  console.error(`API request failed (${response.status}):`, rawBody);
+  throw new Error(parseApiErrorBody(rawBody, response.status));
+}
+
 function buildAuthHeaders(init?: RequestInit): Headers {
   const headers = new Headers(init?.headers);
   const token = getToken();
@@ -43,8 +85,7 @@ export async function apiJsonRequest<T>(path: string, init?: RequestInit): Promi
   handleUnauthorized(response);
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    return throwApiError(response);
   }
 
   if (response.status === 204) {
@@ -71,7 +112,6 @@ export async function apiNoContentRequest(path: string, init?: RequestInit): Pro
   handleUnauthorized(response);
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || `Request failed with status ${response.status}`);
+    return throwApiError(response);
   }
 }

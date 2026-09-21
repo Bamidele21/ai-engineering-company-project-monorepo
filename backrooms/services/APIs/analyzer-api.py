@@ -2,6 +2,7 @@
 
 import csv
 import io
+import logging
 import os
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from scripts.CSV_analyzer.analyze import analyze_records, load_records, metric_r
 
 
 app = FastAPI(title="Nexova Incident Analyzer API")
+logger = logging.getLogger(__name__)
 allowed_origins = [origin.strip() for origin in os.getenv("ANALYZER_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
@@ -77,7 +79,11 @@ async def analyze_incidents(file: UploadFile = File(...)) -> dict[str, Any]:
     except UnicodeDecodeError as error:
         raise HTTPException(status_code=400, detail="The file must be a UTF-8 CSV.") from error
     except (OSError, csv.Error, ValueError) as error:
-        raise HTTPException(status_code=400, detail=f"Invalid CSV file: {error}") from error
+        logger.exception("Failed to parse the uploaded incident CSV")
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is not a valid CSV.",
+        ) from error
 
     return _json_metrics(_last_metrics)
 
