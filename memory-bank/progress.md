@@ -1,5 +1,26 @@
 # Progress
 
+# Error handling audit (2026-09-19)
+
+Scope audited:
+1. `backrooms` — analyzer FastAPI + Supply Directory API (routes, auth, services, email, security, database, tests)
+2. `scripts` — CSV analyzer CLI + TypeScript business logic module
+3. `UIs` — backoffice, talent-pipeline-tracker, website, landing page (82 source files total; build artifacts and virtualenvs excluded)
+
+What changed: no code changes — audit-only pass. Full findings saved to root `error-handling-audit-report.md`.
+
+Summary of findings (by severity):
+1. No CRITICAL findings.
+2. HIGH (3): password-reset email failures swallowed end-to-end so users are told an email was sent when none was (`routes/auth.py` + both forgot-password pages); tracker API client throws raw response bodies into UI error states (`lib/api/client.ts`); analyzer API returns raw exception text with temp-file paths in 400 details (`analyzer-api.py`).
+3. MEDIUM (4): unguarded env parsing in `auth/security.py` (startup crash / 500 / swallowed reset misconfiguration); raw browser network errors shown via `lib/auth/session.ts`; CLI analyzer unguarded export/`input()` (EOFError under automation); potential PII + reset token in logs via `logger.exception` in `routes/auth.py`.
+4. LOW (11): unguarded upload read, email SDK call, broad rollback except, profile invariant error, supplier route DB errors, malformed-hash login 500, missing retry CTAs on load errors, documented localStorage swallows, notes normalize-to-`[]` fallback, export download link, import-time `runSampleUsage()` with no error boundary.
+5. Exit codes (category 8): no violations — `analyze.py` and the password-recovery test script return distinct codes.
+
+Recommended next steps:
+1. Fix HIGH-1 (reset email) first: distinguish config errors (503 + alerting) from send failures; the UI should show the generic confirmation only after a real 200.
+2. Fix HIGH-2/HIGH-3: stop rendering raw server/exception text in the UI; parse `detail` like the backoffice `parseApiError`; return fixed messages server-side.
+3. Then the MEDIUM items plus retry CTAs (LOW-7) in a follow-up hardening sprint.
+
 # Sprint 3 Password recovery, change, and release readiness (2026-09-16)
 
 Scope changed:
