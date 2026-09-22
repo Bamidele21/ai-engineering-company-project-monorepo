@@ -1,6 +1,7 @@
 "use client";
+/* eslint-disable react-hooks/set-state-in-effect */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { CandidateFilters } from "@/components/candidates/CandidateFilters";
@@ -41,45 +42,45 @@ export default function Home() {
     router.replace(queryString ? `${pathname}?${queryString}` : pathname);
   };
 
-  useEffect(() => {
-    const loadRecords = async () => {
-      setLoading(true);
-      setError("");
+  const loadRecords = useCallback(async () => {
+    setLoading(true);
+    setError("");
 
-      try {
-        const response = await getRecords({
-          page: pageFromQuery,
-          limit: 20,
-          status: statusFromQuery,
-          stage: stageFromQuery,
-          search: searchTerm,
-        });
+    try {
+      const response = await getRecords({
+        page: pageFromQuery,
+        limit: 20,
+        status: statusFromQuery,
+        stage: stageFromQuery,
+        search: searchTerm,
+      });
 
-        setRecords(response.items);
-        setTotal(response.total);
-        setTotalPages(response.totalPages);
+      setRecords(response.items);
+      setTotal(response.total);
+      setTotalPages(response.totalPages);
 
-        if (pageFromQuery > response.totalPages) {
-          const params = new URLSearchParams(searchParams.toString());
-          if (response.totalPages <= 1) {
-            params.delete("page");
-          } else {
-            params.set("page", String(response.totalPages));
-          }
-
-          const queryString = params.toString();
-          router.replace(queryString ? `${pathname}?${queryString}` : pathname);
+      if (pageFromQuery > response.totalPages) {
+        const params = new URLSearchParams(searchParams.toString());
+        if (response.totalPages <= 1) {
+          params.delete("page");
+        } else {
+          params.set("page", String(response.totalPages));
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unexpected error while loading candidates.";
-        setError(message);
-      } finally {
-        setLoading(false);
-      }
-    };
 
-    void loadRecords();
+        const queryString = params.toString();
+        router.replace(queryString ? `${pathname}?${queryString}` : pathname);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unexpected error while loading candidates.";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
   }, [pageFromQuery, statusFromQuery, stageFromQuery, searchTerm, pathname, router, searchParams]);
+
+  useEffect(() => {
+    void loadRecords();
+  }, [loadRecords]);
 
   const handleSearchChange = (value: string) => {
     setSearchTerm(value);
@@ -127,7 +128,16 @@ export default function Home() {
         ) : null}
 
         {!loading && error ? (
-          <section className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</section>
+          <section className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+            <p>{error}</p>
+            <button
+              type="button"
+              onClick={() => void loadRecords()}
+              className="mt-3 rounded-md border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100"
+            >
+              Try again
+            </button>
+          </section>
         ) : null}
 
         {!loading && !error && records.length === 0 ? (

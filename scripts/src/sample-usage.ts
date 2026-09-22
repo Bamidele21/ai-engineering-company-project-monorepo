@@ -191,4 +191,11 @@ export function runSampleUsage() {
 
 
 
-export const sampleUsageResults = runSampleUsage();
+export const sampleUsageResults = (() => {
+  try {
+    return runSampleUsage();
+  } catch (error) {
+    console.error("Failed to compute sample usage results", error);
+    return null;
+  }
+})();

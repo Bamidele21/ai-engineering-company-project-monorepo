@@ -468,7 +468,10 @@ export default function SuppliersPage() {
 
           {loadError ? (
             <p className="supplier-error" role="alert">
-              {loadError}
+              {loadError}{" "}
+              <button type="button" onClick={() => void loadSuppliers()}>
+                Try again
+              </button>
             </p>
           ) : null}
 

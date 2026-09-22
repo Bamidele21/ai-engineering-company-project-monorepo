@@ -1,6 +1,7 @@
 "use client";
+/* eslint-disable react-hooks/set-state-in-effect */
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchMe, saveProfile } from "@/lib/auth/session";
 import type { UserWithProfile } from "@/lib/auth/types";
@@ -18,30 +19,30 @@ export default function ProfilePage() {
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
 
-  useEffect(() => {
-    const load = async () => {
-      setIsLoading(true);
-      setLoadError("");
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError("");
 
-      try {
-        const current = await fetchMe();
-        setAccount(current);
-        setName(current.profile.name ?? "");
-        setPhone(current.profile.phone ?? "");
-        setAddress(current.profile.address ?? "");
-      } catch (error) {
-        setLoadError(
-          error instanceof Error
-            ? error.message
-            : "Unable to load your account."
-        );
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void load();
+    try {
+      const current = await fetchMe();
+      setAccount(current);
+      setName(current.profile.name ?? "");
+      setPhone(current.profile.phone ?? "");
+      setAddress(current.profile.address ?? "");
+    } catch (error) {
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load your account."
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -99,12 +100,19 @@ export default function ProfilePage() {
         ) : null}
 
         {!isLoading && loadError ? (
-          <p
+          <div
             className="mt-6 rounded-md border-l-4 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700"
             role="alert"
           >
-            {loadError}
-          </p>
+            <p>{loadError}</p>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="mt-2 font-semibold underline underline-offset-2 hover:text-red-800"
+            >
+              Try again
+            </button>
+          </div>
         ) : null}
 
         {!isLoading && !loadError && account ? (

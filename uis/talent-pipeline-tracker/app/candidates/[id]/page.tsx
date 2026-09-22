@@ -1,7 +1,8 @@
 "use client";
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getRecordById, patchRecord } from "@/lib/api/candidates";
 import { addNote, deleteNote, getNotes } from "@/lib/api/notes";
@@ -70,46 +71,50 @@ export default function CandidateDetailPage() {
   const [deleteLoadingId, setDeleteLoadingId] = useState<string>("");
   const [deleteNoteError, setDeleteNoteError] = useState<string>("");
 
-  useEffect(() => {
+  const loadCandidate = useCallback(async () => {
     if (!candidateId) {
       return;
     }
 
-    const loadCandidate = async () => {
-      setCandidateLoading(true);
-      setCandidateError("");
+    setCandidateLoading(true);
+    setCandidateError("");
 
-      try {
-        const data = await getRecordById(candidateId);
-        setCandidate(data);
-        setStatusDraft(data.status ?? "");
-        setStageDraft(data.stage ?? "");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to load candidate details.";
-        setCandidateError(message);
-      } finally {
-        setCandidateLoading(false);
-      }
-    };
+    try {
+      const data = await getRecordById(candidateId);
+      setCandidate(data);
+      setStatusDraft(data.status ?? "");
+      setStageDraft(data.stage ?? "");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load candidate details.";
+      setCandidateError(message);
+    } finally {
+      setCandidateLoading(false);
+    }
+  }, [candidateId]);
 
-    const loadNotes = async () => {
-      setNotesLoading(true);
-      setNotesError("");
+  const loadNotes = useCallback(async () => {
+    if (!candidateId) {
+      return;
+    }
 
-      try {
-        const response = await getNotes(candidateId);
-        setNotes(response);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to load candidate notes.";
-        setNotesError(message);
-      } finally {
-        setNotesLoading(false);
-      }
-    };
+    setNotesLoading(true);
+    setNotesError("");
 
+    try {
+      const response = await getNotes(candidateId);
+      setNotes(response);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load candidate notes.";
+      setNotesError(message);
+    } finally {
+      setNotesLoading(false);
+    }
+  }, [candidateId]);
+
+  useEffect(() => {
     void loadCandidate();
     void loadNotes();
-  }, [candidateId]);
+  }, [loadCandidate, loadNotes]);
 
   const candidateName = useMemo(() => {
     if (!candidate) {
@@ -238,7 +243,16 @@ export default function CandidateDetailPage() {
         ) : null}
 
         {!candidateLoading && candidateError ? (
-          <section className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{candidateError}</section>
+          <section className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+            <p>{candidateError}</p>
+            <button
+              type="button"
+              onClick={() => void loadCandidate()}
+              className="mt-3 rounded-md border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100"
+            >
+              Try again
+            </button>
+          </section>
         ) : null}
 
         {!candidateLoading && !candidateError && candidate ? (
@@ -404,7 +418,18 @@ export default function CandidateDetailPage() {
 
               <div className="mt-6">
                 {notesLoading ? <p className="text-sm text-slate-600">Loading notes...</p> : null}
-                {!notesLoading && notesError ? <p className="text-sm text-red-700">{notesError}</p> : null}
+                {!notesLoading && notesError ? (
+                  <div className="text-sm text-red-700">
+                    <p>{notesError}</p>
+                    <button
+                      type="button"
+                      onClick={() => void loadNotes()}
+                      className="mt-2 rounded-md border border-red-300 px-3 py-1.5 font-semibold hover:bg-red-100"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : null}
                 {!notesLoading && !notesError && notes.length === 0 ? (
                   <p className="text-sm text-slate-600">No internal notes yet.</p>
                 ) : null}

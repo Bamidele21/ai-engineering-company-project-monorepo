@@ -10,6 +10,18 @@ DEFAULT_RESET_URL = "http://localhost:3000/reset-password"
 DEFAULT_FROM_EMAIL = "Nexova <onboarding@resend.dev>"
 
 
+class EmailConfigurationError(RuntimeError):
+	"""Raised when password reset email delivery is not configured."""
+
+
+class EmailDeliveryError(RuntimeError):
+	"""Raised when the email provider fails to deliver a message."""
+
+
+def is_email_delivery_configured() -> bool:
+	return bool(os.getenv("RESEND_API_KEY"))
+
+
 def build_password_reset_url(token: str) -> str:
 	base_url = os.getenv("PASSWORD_RESET_URL", DEFAULT_RESET_URL)
 	separator = "&" if "?" in base_url else "?"
@@ -57,19 +69,24 @@ def send_password_reset_email(
 ) -> None:
 	api_key = os.getenv("RESEND_API_KEY")
 	if not api_key:
-		raise RuntimeError("RESEND_API_KEY must be configured")
+		raise EmailConfigurationError("RESEND_API_KEY must be configured")
 
 	from_email = os.getenv("RESEND_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 	reset_url = build_password_reset_url(token)
 	html, text = _render_email(reset_url, expires_in_minutes)
 
 	resend.api_key = api_key
-	resend.Emails.send(
-		{
-			"from": from_email,
-			"to": [to_email],
-			"subject": "Reset your Nexova password",
-			"html": html,
-			"text": text,
-		}
-	)
+	try:
+		resend.Emails.send(
+			{
+				"from": from_email,
+				"to": [to_email],
+				"subject": "Reset your Nexova password",
+				"html": html,
+				"text": text,
+			}
+		)
+	except Exception as error:
+		raise EmailDeliveryError(
+			"The password reset email could not be delivered"
+		) from error

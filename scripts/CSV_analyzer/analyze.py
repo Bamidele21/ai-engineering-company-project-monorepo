@@ -245,10 +245,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 		return 1
 
 	print_summary(input_path.name, metrics)
-	answer = input("Export results to CSV? [y / n]: ").strip().lower()
+	try:
+		answer = input("Export results to CSV? [y / n]: ").strip().lower()
+	except EOFError:
+		answer = ""
 	if answer == "y":
 		output_path = Path("results.csv")
-		export_results(output_path, metrics)
+		try:
+			export_results(output_path, metrics)
+		except OSError as error:
+			print(
+				f"Error: could not export results to {output_path}: {error}",
+				file=sys.stderr,
+			)
+			return 1
 		print(f"Results exported to {output_path}")
 	return 0
 

@@ -3,7 +3,12 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from services.Supply_directory_API.auth.dependencies import get_current_user
-from services.Supply_directory_API.auth.email import send_password_reset_email
+from services.Supply_directory_API.auth.email import (
+	EmailConfigurationError,
+	EmailDeliveryError,
+	is_email_delivery_configured,
+	send_password_reset_email,
+)
 from services.Supply_directory_API.auth.security import (
 	create_access_token,
 	decode_password_reset_token,
@@ -40,6 +45,9 @@ GENERIC_FORGOT_MESSAGE = (
 	"If that address is registered, you'll receive a reset link shortly."
 )
 INVALID_RESET_TOKEN_MESSAGE = "Invalid or expired reset token."
+EMAIL_UNAVAILABLE_MESSAGE = (
+	"Password reset is temporarily unavailable. Please try again later."
+)
 
 
 def _user_response(user: AuthenticatedUser) -> UserResponse:
@@ -62,7 +70,13 @@ def login(payload: LoginRequest) -> TokenResponse:
 			headers={"WWW-Authenticate": "Bearer"},
 		)
 	user_id, user = user_entry
-	if not user.is_active or not verify_password(payload.password, user.hashed_password):
+	try:
+		password_ok = verify_password(payload.password, user.hashed_password)
+	except ValueError:
+		logger.error("Corrupt password hash for user %s; rejecting login", user_id)
+		password_ok = False
+
+	if not user.is_active or not password_ok:
 		raise HTTPException(
 			status_code=status.HTTP_401_UNAUTHORIZED,
 			detail="Incorrect email or password",
@@ -87,12 +101,30 @@ def get_me(current_user: AuthenticatedUser = Depends(get_current_user)) -> UserW
 
 @router.post("/forgot-password", response_model=MessageResponse)
 def forgot_password(payload: ForgotPasswordRequest) -> MessageResponse:
+	# Checked before the user lookup so a misconfigured service fails for every
+	# address rather than only for registered ones, which would leak accounts.
+	if not is_email_delivery_configured():
+		logger.error("Password reset requested while email delivery is not configured")
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail=EMAIL_UNAVAILABLE_MESSAGE,
+		)
+
 	token: str | None = None
 	expires_in = 0
 	with get_db() as db:
 		user_entry = get_user_entry_by_email(db, str(payload.email))
 	if user_entry is not None and user_entry[1].is_active:
-		token, expires_in = create_password_reset(user_entry[0])
+		try:
+			token, expires_in = create_password_reset(user_entry[0])
+		except (RuntimeError, ValueError):
+			logger.error(
+				"Password reset token could not be created due to a configuration error"
+			)
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail=EMAIL_UNAVAILABLE_MESSAGE,
+			)
 
 	if token is not None:
 		try:
@@ -101,8 +133,17 @@ def forgot_password(payload: ForgotPasswordRequest) -> MessageResponse:
 				token=token,
 				expires_in_minutes=max(1, expires_in // 60),
 			)
-		except Exception:
-			logger.exception("Unable to send password reset email")
+		except EmailConfigurationError:
+			logger.error("Password reset email delivery is not configured")
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail=EMAIL_UNAVAILABLE_MESSAGE,
+			)
+		except EmailDeliveryError:
+			# Sanitized: never log the recipient, reset URL, or token. Still
+			# returns the generic 200 so delivery failures cannot be used to
+			# enumerate registered addresses.
+			logger.error("Password reset email delivery failed for an active account")
 
 	return MessageResponse(detail=GENERIC_FORGOT_MESSAGE)
 

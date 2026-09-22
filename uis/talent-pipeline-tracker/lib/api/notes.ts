@@ -18,7 +18,7 @@ function normalizeNotes(payload: unknown): CandidateNote[] {
     }
   }
 
-  return [];
+  throw new Error("Received an unexpected notes response.");
 }
 
 export async function getNotes(recordId: string): Promise<CandidateNote[]> {

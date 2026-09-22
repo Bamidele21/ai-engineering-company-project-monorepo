@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,6 +8,8 @@ from services.Supply_directory_API.auth.dependencies import get_current_user
 from services.Supply_directory_API.database import get_db, get_suppliers_table
 from services.Supply_directory_API.models import AuthenticatedUser, Supplier, SupplierCountry, SupplierStatus
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
 
@@ -42,6 +45,14 @@ def _find_supplier_or_404(table, supplier_id: int):
 	return supplier
 
 
+def _get_after_write(table, supplier_id: int):
+	supplier = table.get(doc_id=supplier_id)
+	if supplier is None:
+		logger.error("Supplier record %s missing after write", supplier_id)
+		raise HTTPException(status_code=500, detail="Supplier update failed. Please try again.")
+	return supplier
+
+
 def _require_supplier_writer(current_user: AuthenticatedUser) -> None:
 	if current_user.role not in {"admin", "manager"}:
 		raise HTTPException(status_code=403, detail="Supplier write access requires admin or manager role")
@@ -56,7 +67,7 @@ def create_supplier(
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		doc_id = table.insert(_as_storable(payload))
-		created = table.get(doc_id=doc_id)
+		created = _get_after_write(table, doc_id)
 		return _attach_id(created)
 
 
@@ -110,7 +121,7 @@ def update_supplier_rate(
 			},
 			doc_ids=[supplier_id],
 		)
-		updated = table.get(doc_id=supplier_id)
+		updated = _get_after_write(table, supplier_id)
 
 	return _attach_id(updated)
 
@@ -126,7 +137,7 @@ def update_supplier_status(
 		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
 		table.update({"status": payload.status}, doc_ids=[supplier_id])
-		updated = table.get(doc_id=supplier_id)
+		updated = _get_after_write(table, supplier_id)
 
 	return _attach_id(updated)
 

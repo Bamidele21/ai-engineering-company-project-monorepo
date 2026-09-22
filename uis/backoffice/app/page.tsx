@@ -13,6 +13,10 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
 }
 
 export default function Home() {
+  if (!sampleUsageResults) {
+    return <main className="backoffice-shell"><section className="workspace"><header className="topbar"><div><p className="eyebrow">Backoffice / Overview</p><h1>Talent command center</h1></div></header><div className="dashboard-content"><section className="hero-panel"><p className="hero-copy">The dashboard could not be rendered because the sample usage computation failed. Check the console for details.</p></section></div></section></main>;
+  }
+
   const { reports, scoring, validations } = sampleUsageResults;
   const vacancyValidation = validations.vacancy;
   const activeCandidates = sampleCandidates.filter((candidate) => candidate.status === "Active").length;

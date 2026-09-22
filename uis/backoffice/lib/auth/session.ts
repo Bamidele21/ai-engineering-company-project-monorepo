@@ -42,8 +42,18 @@ async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);
 }
 
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Error(
+      "Network error — unable to reach the server. Please check your connection and try again."
+    );
+  }
+}
+
 export async function login(email: string, password: string): Promise<void> {
-  const response = await fetch(`${AUTH_API_URL}/auth/login`, {
+  const response = await request(`${AUTH_API_URL}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -62,7 +72,7 @@ export async function login(email: string, password: string): Promise<void> {
 }
 
 export async function register(payload: RegisterPayload): Promise<void> {
-  const response = await fetch(`${AUTH_API_URL}/users`, {
+  const response = await request(`${AUTH_API_URL}/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -122,7 +132,7 @@ export async function saveProfile(
 export async function requestPasswordReset(
   payload: ForgotPasswordPayload
 ): Promise<void> {
-  const response = await fetch(`${AUTH_API_URL}/auth/forgot-password`, {
+  const response = await request(`${AUTH_API_URL}/auth/forgot-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -140,7 +150,7 @@ export async function requestPasswordReset(
 export async function resetPassword(
   payload: ResetPasswordPayload
 ): Promise<void> {
-  const response = await fetch(`${AUTH_API_URL}/auth/reset-password`, {
+  const response = await request(`${AUTH_API_URL}/auth/reset-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
