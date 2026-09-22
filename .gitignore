@@ -2,3 +2,6 @@
 backrooms/services/Supply_directory_API/password_resets_db.json
 __pycache__/
 *.pyc
+.coverage
+.pytest_cache/
+node_modules/

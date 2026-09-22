@@ -1,5 +1,29 @@
 # Progress
 
+# AUTH-088 authentication unit test suite (2026-09-22)
+
+Scope changed:
+1. `backrooms/services/conftest.py` (new) — pytest bootstrap (adds `backrooms/` to `sys.path`, sets auth env vars before import, temp-TinyDB + client + auth-header + email-stub fixtures).
+2. `backrooms/services/Supply_directory_API/tests/` — eight new pytest modules: `test_security.py`, `test_register.py`, `test_login.py`, `test_me.py`, `test_forgot_password.py`, `test_reset_password.py`, `test_change_password.py`, `test_services.py`.
+3. `backrooms/services/pyproject.toml` — added `[tool.pytest.ini_options]` (`testpaths`) and `[tool.coverage.run]` (`source` scoped to `auth/` + `routes/auth.py`).
+4. `testing.md` (repo root) — test plan, run instructions, coverage results, and AI-assisted-workflow notes.
+5. `.gitignore` — added `.coverage` and `.pytest_cache/`.
+
+What changed:
+1. Wrote 73 pytest tests covering every authentication endpoint (`POST /users`, `POST /auth/login`, `GET /auth/me`, `POST /auth/forgot-password`, `POST /auth/reset-password`, `POST /auth/change-password`) plus the token/password primitives in `auth/security.py` and the auth service layer in `auth/services.py`.
+2. Each endpoint has happy-path, edge-case, and failure-mode coverage, asserting business decisions (bcrypt storage, role defaulting, enumeration resistance, single-use/expiry reset tokens, inactive-account rejection, wrong-current-password rejection) rather than response serialisation.
+3. Coverage is scoped to the authentication module via `[tool.coverage.run] source` so a bare `uv run pytest --cov` reports auth-only numbers instead of the whole package.
+
+Validation performed:
+1. `uv run pytest` from `backrooms/services` passed 73/73.
+2. `uv run pytest --cov` reported 87% across the authentication module (312 statements): security 93%, services 95%, dependencies 94%, routes/auth 86%, email 43% (provider call intentionally stubbed).
+3. Confirmed the tracked `suppliers_db.json` is unmodified and `password_resets_db.json` is not created in the repo (tests use a temp TinyDB).
+
+Remaining risks / notes:
+1. `auth/email.py` sits at 43% because `send_password_reset_email` (the Resend HTTP call) is stubbed in endpoint tests; only the deterministic helpers (`is_email_delivery_configured`, `build_password_reset_url`) are covered. Acceptable for a unit suite — the provider boundary is not meaningful to exercise here.
+2. The pre-existing standalone script `tests/test_password_recovery.py` is retained unchanged; it is not collected by pytest (no `test_*` functions) but still exercises the full reset flow when run directly.
+3. Tracking of the pre-existing `__pycache__/*.pyc` files: test runs recompile them (diff noise). They are restored after validation, consistent with prior sessions; fully untracking them remains a separate cleanup needing approval.
+
 # Error handling LOW-severity remediation (2026-09-21)
 
 Scope changed:

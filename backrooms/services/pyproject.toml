@@ -32,3 +32,19 @@ include = [
   "auth/*.py",
   "routes/*.py",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["Supply_directory_API/tests"]
+
+[tool.coverage.run]
+source = [
+    "services.Supply_directory_API.auth",
+    "services.Supply_directory_API.routes.auth",
+]
