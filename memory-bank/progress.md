@@ -1,5 +1,28 @@
 # Progress
 
+# FE-019 frontend utility test suite (2026-09-22)
+
+Scope changed:
+1. `jest.config.js` (new, repo root) — ts-jest transform (inline `module: commonjs`, `isolatedModules: true`, `ignoreDeprecations: "6.0"`), node test environment, `roots` scoped to `uis/talent-pipeline-tracker`, `@/*` moduleNameMapper.
+2. `uis/talent-pipeline-tracker/__tests__/` (new) — `labels.test.ts`, `storage.test.ts`, `session.test.ts`.
+3. `uis/talent-pipeline-tracker/lib/auth/session.ts` — exported the previously private `parseApiError` helper so it can be unit-tested.
+4. `package.json` (root) — added a `test` script (`jest --coverage`).
+5. `uis/talent-pipeline-tracker/tsconfig.json` — excluded `__tests__` so `next build` does not type-check Jest files.
+6. `.gitignore` — added `coverage/`.
+7. `testing.md` (repo root) — added the FE-019 section and frontend run instructions.
+
+What changed:
+1. Added 17 Jest tests covering three utility functions (each with happy-path + failure-mode): `toStatusLabel`/`toStageLabel` (formatters), `hasValidSession` + token storage round-trip (token helper), and `parseApiError` (response parser). The token helper is exercised against real base64url JWTs in a mocked `window.localStorage` (node environment, no jsdom dependency).
+
+Validation performed:
+1. `npx jest --coverage` from the repo root passed 17/17 (3 suites).
+2. `npm run build` in `uis/talent-pipeline-tracker` passed after the tsconfig exclusion.
+3. Coverage: `lib/labels.ts` 100%, `lib/auth/storage.ts` 88%; the remaining files in the report (`client.ts`, `session.ts`) are pulled in transitively and not part of FE-019 scope.
+
+Remaining risks / notes:
+1. ts-jest 29.4.12 is paired with jest 30.5.2 (compatible per peer deps) and TypeScript 6.0.3, which required `ignoreDeprecations: "6.0"` for the deprecated `moduleResolution: node10` used by the CommonJS transform.
+2. No `jest-environment-jsdom` is installed; the storage tests use a minimal in-memory `window`/`localStorage` stand-in, which is sufficient for the token helper logic but would not exercise real browser storage quirks.
+
 # API-042 backoffice endpoint test suite (2026-09-22)
 
 Scope changed:

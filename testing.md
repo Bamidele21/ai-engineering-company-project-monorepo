@@ -1,9 +1,10 @@
 # TESTING.md — Nexova Supplier Directory API
 
-Unit test coverage for the Nexova backend: the authentication API (AUTH-088)
-and the backoffice endpoint groups (API-042). The goal is confidence in the
-business logic — token generation and expiry, password handling, account state,
-and supplier/user management decisions — not HTTP serialisation.
+Unit test coverage for the Nexova platform: the authentication API (AUTH-088),
+the backoffice endpoint groups (API-042), and the frontend utility functions
+(FE-019). The goal is confidence in the business logic — token generation and
+expiry, password handling, account state, supplier/user management, and the
+frontend helpers that parse and format that data — not HTTP serialisation.
 
 ## How to run the tests
 
@@ -27,6 +28,21 @@ uv run pytest --cov
 The tests run against an isolated temporary TinyDB (see `conftest.py`), so the
 tracked `suppliers_db.json` and the local `password_resets_db.json` are never
 modified, and the Resend email sender is stubbed so no real email is sent.
+
+### Frontend (Jest)
+
+The frontend suite is separate and targets the `uis/talent-pipeline-tracker`
+utilities. Jest, ts-jest, and `@types/jest` are declared in the root
+`package.json`; the config lives in the root `jest.config.js`.
+
+```bash
+# from the repository root
+npm test
+# equivalent: npx jest --coverage
+```
+
+The tracker's `tsconfig.json` excludes `__tests__` so `next build` does not
+type-check the Jest files.
 
 ## What each suite covers
 
@@ -116,6 +132,35 @@ rejection, and salted bcrypt verification.
 - Failure: non-owner, non-admin access returns `403` (the ownership check also
   hides whether a user id exists); non-admin role change returns `403`;
   unauthenticated returns `401`.
+
+## Frontend utility functions (FE-019)
+
+Located in `uis/talent-pipeline-tracker/__tests__/` and run with Jest.
+
+### `labels.test.ts` — `toStatusLabel` / `toStageLabel`
+
+- Happy: a known status/stage maps to its human label (`in_progress` →
+  `In progress`, `offer_presented` → `Offer presented`).
+- Failure: `undefined` returns `-`; an unknown value is passed through unchanged.
+
+### `storage.test.ts` — `hasValidSession` + token storage
+
+- Happy: a stored, unexpired JWT makes `hasValidSession()` return `true`, and
+  `setToken`/`getToken` round-trip through `localStorage`.
+- Failure: an expired token, a malformed token, and a missing token all return
+  `false`; `getToken` returns `null` when `window` is unavailable.
+
+### `session.test.ts` — `parseApiError`
+
+- Happy: a string `detail` is returned as the message.
+- Failure: an array `detail` is joined into one sentence; `null`, an empty
+  object, and non-object payloads all fall back to the provided message.
+
+Each function has at least one happy-path and one failure-mode test, per the
+ticket. Coverage for the tested helpers is `lib/labels.ts` 100% and
+`lib/auth/storage.ts` 88%; `lib/auth/session.ts` appears lower overall only
+because the other exported functions in that module (login, register, etc.) are
+async fetch flows outside FE-019's scope.
 
 ## Coverage results
 

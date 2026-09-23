@@ -15,7 +15,7 @@ interface ApiErrorPayload {
   detail?: string | Array<{ msg?: string }>;
 }
 
-function parseApiError(payload: unknown, fallback: string): string {
+export function parseApiError(payload: unknown, fallback: string): string {
   if (!payload || typeof payload !== "object") {
     return fallback;
   }
