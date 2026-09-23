@@ -47,4 +47,6 @@ testpaths = ["Supply_directory_API/tests"]
 source = [
     "services.Supply_directory_API.auth",
     "services.Supply_directory_API.routes.auth",
+    "services.Supply_directory_API.routes.suppliers",
+    "services.Supply_directory_API.routes.users",
 ]

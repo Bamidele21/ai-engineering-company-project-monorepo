@@ -35,8 +35,13 @@ os.environ.setdefault("RESEND_API_KEY", "test-api-key-for-pytest")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from services.Supply_directory_API import database  # noqa: E402
+from services.Supply_directory_API.auth.services import (  # noqa: E402
+    get_user_entry_by_email,
+    update_user,
+)
 from services.Supply_directory_API.database import get_db  # noqa: E402
 from services.Supply_directory_API.main import app  # noqa: E402
+from services.Supply_directory_API.models import UserUpdate  # noqa: E402
 from services.Supply_directory_API.routes import auth as auth_routes  # noqa: E402
 
 
@@ -101,3 +106,50 @@ def email_sender(monkeypatch):
 
     monkeypatch.setattr(auth_routes, "send_password_reset_email", fake_send)
     return sent
+
+
+def _register_with_role(client, email: str, password: str, role: str) -> dict:
+    """Register a user and promote it to ``role`` via the service layer."""
+    response = client.post(
+        "/users", json={"email": email, "password": password, "name": role.title()}
+    )
+    assert response.status_code == 201
+    with get_db() as db:
+        user_id, _ = get_user_entry_by_email(db, email)
+        update_user(db, user_id, UserUpdate(role=role))
+    return {"email": email, "password": password}
+
+
+def _headers_for(client, credentials: dict) -> dict:
+    response = client.post(
+        "/auth/login",
+        json={"email": credentials["email"], "password": credentials["password"]},
+    )
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def admin_user(client):
+    """A user with the ``admin`` role, for supplier write and user management."""
+    return _register_with_role(
+        client, "admin@nexova.com", "admin-password-123", "admin"
+    )
+
+
+@pytest.fixture()
+def manager_user(client):
+    """A user with the ``manager`` role, which can write supplier records."""
+    return _register_with_role(
+        client, "manager@nexova.com", "manager-password-123", "manager"
+    )
+
+
+@pytest.fixture()
+def admin_headers(client, admin_user):
+    return _headers_for(client, admin_user)
+
+
+@pytest.fixture()
+def manager_headers(client, manager_user):
+    return _headers_for(client, manager_user)

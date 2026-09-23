@@ -1,5 +1,27 @@
 # Progress
 
+# API-042 backoffice endpoint test suite (2026-09-22)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/tests/test_suppliers.py` (new) — three-tier coverage of the `/suppliers` directory CRUD.
+2. `backrooms/services/Supply_directory_API/tests/test_users.py` (new) — user management endpoints (`GET /users`, `GET/PUT/DELETE /users/{id}`) with ownership/admin authorization.
+3. `backrooms/services/conftest.py` — added `admin_user`/`admin_headers` and `manager_user`/`manager_headers` fixtures (register then promote via the service layer).
+4. `backrooms/services/pyproject.toml` — broadened `[tool.coverage.run] source` to include `routes/suppliers.py` and `routes/users.py`.
+5. `testing.md` (repo root) — added the API-042 test plan, updated the combined coverage results, and documented the authorization-ordering finding.
+
+What changed:
+1. Added 35 backoffice tests: 21 for `/suppliers` and 14 for `/users`. Each endpoint has happy-path, edge-case, and failure-mode coverage asserting business decisions (currency/country matching, category requirements, rate-update `updated_at` refresh, non-writer `403`, ownership rules, admin-only role changes).
+2. Coverage is now a single combined report across the authentication and backoffice modules via `uv run pytest --cov`.
+
+Validation performed:
+1. `uv run pytest` from `backrooms/services` passed 108/108.
+2. `uv run pytest --cov` reported 90% total: `routes/suppliers.py` 98%, `routes/users.py` 98%, auth modules unchanged (auth 86–95%). Both backoffice groups exceed API-042's 60% target and auth remains above AUTH-088's 70%.
+3. Confirmed the tracked `suppliers_db.json` is unmodified.
+
+Remaining risks / notes:
+1. A non-admin requesting a non-existent user id returns `403` (not `404`) because `_require_owner_or_admin` runs before the record lookup — a deliberate decision that hides record existence. The unknown-id tests therefore exercise the admin path.
+2. `auth/email.py` remains at 43% by design (Resend provider call stubbed in tests).
+
 # AUTH-088 authentication unit test suite (2026-09-22)
 
 Scope changed:

@@ -1,8 +1,9 @@
-# TESTING.md — Nexova Authentication API (AUTH-088)
+# TESTING.md — Nexova Supplier Directory API
 
-Unit test coverage for the authentication API built in the previous milestone.
-The goal is confidence in the business logic — token generation and expiry,
-password handling, and account state decisions — not HTTP serialisation.
+Unit test coverage for the Nexova backend: the authentication API (AUTH-088)
+and the backoffice endpoint groups (API-042). The goal is confidence in the
+business logic — token generation and expiry, password handling, account state,
+and supplier/user management decisions — not HTTP serialisation.
 
 ## How to run the tests
 
@@ -19,7 +20,7 @@ uv sync
 # run the whole suite
 uv run pytest
 
-# run with coverage (scoped to the authentication modules)
+# run with coverage (scoped to the authentication + backoffice modules)
 uv run pytest --cov
 ```
 
@@ -39,6 +40,8 @@ modified, and the Resend email sender is stubbed so no real email is sent.
 | `test_reset_password.py` | `POST /auth/reset-password` |
 | `test_change_password.py` | `POST /auth/change-password` |
 | `test_services.py` | service-layer functions: `create_user`, `consume_password_reset`, `set_password`, `change_password`, `update_user`, `update_profile`, `delete_user`, reset-token lookups |
+| `test_suppliers.py` | `/suppliers` CRUD: create, list (country/category filters), get, rate update, status update, delete |
+| `test_users.py` | user management: list, get, update (email/role), delete, with ownership/admin rules |
 
 ## Test plan — cases and rationale
 
@@ -94,9 +97,30 @@ Direct coverage of the logic that regressed in the incident behind AUTH-088:
 token creation/decode round-trips, expiry enforcement, malformed/missing-claim
 rejection, and salted bcrypt verification.
 
+## Backoffice endpoint groups (API-042)
+
+### `test_suppliers.py` — `/suppliers`
+
+- Happy: admin/manager creates a supplier (`201`); rate update refreshes
+  `monthly_rate` and `updated_at`; status toggles to `suspended`.
+- Edge: currency/country mismatch (`Spain` + `USD`) and empty categories return
+  `422`; list filters by `country` and `category`.
+- Failure: `user` role cannot create/update/delete (`403`); unauthenticated
+  returns `401`; unknown supplier id returns `404`.
+
+### `test_users.py` — user management
+
+- Happy: owner reads/updates/deletes their own record; admin reads any record
+  and changes roles.
+- Edge: duplicate email on update returns `409`.
+- Failure: non-owner, non-admin access returns `403` (the ownership check also
+  hides whether a user id exists); non-admin role change returns `403`;
+  unauthenticated returns `401`.
+
 ## Coverage results
 
-Run with `uv run pytest --cov` (scoped to `auth/` and `routes/auth.py`):
+Run with `uv run pytest --cov` (scoped to `auth/`, `routes/auth.py`,
+`routes/suppliers.py`, and `routes/users.py`):
 
 ```
 Name                                    Stmts   Miss  Cover
@@ -107,14 +131,17 @@ auth/email.py                              30     17    43%
 auth/security.py                           68      5    93%
 auth/services.py                          113      6    95%
 routes/auth.py                             84     12    86%
+routes/suppliers.py                        90      2    98%
+routes/users.py                            55      1    98%
 ------------------------------------------------------------
-TOTAL                                     312     41    87%
+TOTAL                                     457     44    90%
 ```
 
-The lower `email.py` figure reflects the intentional stubbing of the Resend
-sender in endpoint tests; the deterministic, testable pieces (`is_email_delivery_configured`,
-`build_password_reset_url`) are covered, while the provider call itself is a
-third-party boundary that is not meaningful to exercise in unit tests.
+Authentication modules remain at or above 70%, and both backoffice endpoint
+groups exceed the 60% target set by API-042. The lower `email.py` figure reflects
+the intentional stubbing of the Resend sender in endpoint tests; the
+deterministic helpers (`is_email_delivery_configured`, `build_password_reset_url`)
+are covered, while the provider call is a third-party boundary.
 
 ## AI-assisted workflow notes
 
@@ -127,3 +154,8 @@ third-party boundary that is not meaningful to exercise in unit tests.
   `(token, jti, expires_in)` triple, whereas `services.create_password_reset`
   returns a `(token, expires_in)` pair. The tests were written to decode the JWT
   for the `jti` explicitly, documenting the boundary between the two layers.
+- While writing `test_users.py`, the suite surfaced that `_require_owner_or_admin`
+  runs before the record lookup, so a non-admin user requesting a non-existent
+  id receives `403` rather than `404`. The unknown-id cases were therefore
+  asserted through the admin path, documenting a deliberate authorization
+  decision that hides record existence from unprivileged callers.
