@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from tinydb import Query, TinyDB
 
@@ -27,25 +28,44 @@ def _user_from_document(document) -> User:
 	return User(**dict(document))
 
 
+def _backfill_uuid(users_table, document):
+	"""Assign a stable UUID to legacy user documents that predate the field."""
+	if "uuid" in document:
+		return document
+	new_uuid = str(uuid4())
+	users_table.update({"uuid": new_uuid}, doc_ids=[document.doc_id])
+	return users_table.get(doc_id=document.doc_id)
+
+
 def _profile_from_document(document) -> Profile:
 	return Profile(**dict(document))
 
 
 def get_user_by_id(db: TinyDB, user_id: int) -> User | None:
-	document = get_users_table(db).get(doc_id=user_id)
-	return None if document is None else _user_from_document(document)
+	users_table = get_users_table(db)
+	document = users_table.get(doc_id=user_id)
+	if document is None:
+		return None
+	return _user_from_document(_backfill_uuid(users_table, document))
 
 
 def get_user_by_email(db: TinyDB, email: str) -> User | None:
+	users_table = get_users_table(db)
 	query = Query()
-	document = get_users_table(db).get(query.email == email.lower())
-	return None if document is None else _user_from_document(document)
+	document = users_table.get(query.email == email.lower())
+	if document is None:
+		return None
+	return _user_from_document(_backfill_uuid(users_table, document))
 
 
 def get_user_entry_by_email(db: TinyDB, email: str) -> tuple[int, User] | None:
+	users_table = get_users_table(db)
 	query = Query()
-	document = get_users_table(db).get(query.email == email.lower())
-	return None if document is None else (document.doc_id, _user_from_document(document))
+	document = users_table.get(query.email == email.lower())
+	if document is None:
+		return None
+	document = _backfill_uuid(users_table, document)
+	return document.doc_id, _user_from_document(document)
 
 
 def create_user(db: TinyDB, payload: UserCreate) -> int:

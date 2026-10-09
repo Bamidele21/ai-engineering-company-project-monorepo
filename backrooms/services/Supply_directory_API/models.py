@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
@@ -50,6 +51,7 @@ class User(BaseModel):
 	hashed_password: str
 	is_active: bool = True
 	role: UserRole = "user"
+	uuid: str = Field(default_factory=lambda: str(uuid4()))
 	created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -73,6 +75,7 @@ class UserResponse(BaseModel):
 	email: EmailStr
 	is_active: bool
 	role: UserRole
+	uuid: str
 	created_at: datetime
 
 

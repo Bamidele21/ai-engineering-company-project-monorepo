@@ -1,5 +1,5 @@
 [project]
-name = "nexova-supply-directory-api"
+name = "backrooms-apis"
 version = "0.1.0"
 description = "Nexova supplier directory TinyDB API"
 requires-python = ">=3.11"
@@ -7,10 +7,12 @@ dependencies = [
   "dotenv>=0.9.9",
   "fastapi[standard]>=0.116.0",
   "libpass[bcrypt]>=1.9.3",
+  "psycopg2-binary>=2.9.13",
   "pydantic[email]>=2.11.0",
   "python-dotenv>=1.2.3",
   "python-jose[cryptography]>=3.5.0",
   "resend>=2.0.0",
+  "sqlmodel>=0.0.48",
   "tinydb>=4.8.2",
 ]
 
@@ -41,7 +43,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["Supply_directory_API/tests"]
+testpaths = ["Supply_directory_API/tests", "Inventory-API/tests"]
 
 [tool.coverage.run]
 source = [
@@ -49,4 +51,5 @@ source = [
     "services.Supply_directory_API.routes.auth",
     "services.Supply_directory_API.routes.suppliers",
     "services.Supply_directory_API.routes.users",
+    "Inventory-API",
 ]

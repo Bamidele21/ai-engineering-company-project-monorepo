@@ -1,5 +1,151 @@
 # Progress
 
+# Backoffice shell CSS cleanup (2026-10-08)
+
+Scope changed:
+1. `uis/backoffice/app/globals.css`
+2. `memory-bank/progress.md`.
+
+What changed:
+1. Removed the now-dead supplier and incident shell rules that the shared `BackofficeShell` (`.bo-*`) replaced: `.supplier-nav`/`.supplier-brand*`/`.supplier-nav-link*`/`.supplier-connected`/`.supplier-main`/`.supplier-header*`/`.supplier-content` and the equivalent `.incident-*` shell rules, along with their responsive overrides.
+2. Trimmed `.supplier-page`/`.incident-page` to only their CSS custom properties (the `.bo-shell` now owns layout, background, and typography). Repointed the incident footer rule from `.incident-main footer` to `.incident-page footer`.
+3. Kept all content-specific rules (heroes, tables, forms, filters, badges, and the inventory views).
+
+Validation performed:
+1. Exemption: CSS-only presentation change with no functional behaviour (per `.agents/rules/test-coverage.md`), so no new tests are required.
+2. `npm run lint` in `uis/backoffice` passed.
+3. `npm run build` in `uis/backoffice` passed; all routes generated (supplier, incident, and the four inventory views).
+
+Remaining risks / notes:
+1. None functional. The supplier/incident views depend on the `--supplier-*`/`--incident-*` variables inherited from their page root class; removing those page classes would break the theme.
+
+# Backoffice inventory order labels (2026-10-08)
+
+Scope changed:
+1. `uis/backoffice/app/inventory/products/page.tsx`
+2. `uis/backoffice/app/inventory/orders/page.tsx`
+3. `uis/backoffice/app/inventory/orders/inbound/page.tsx`
+4. `uis/backoffice/app/inventory/orders/outbound/page.tsx`
+5. `memory-bank/progress.md`.
+
+What changed:
+1. Renamed the user-facing inventory vocabulary from "asset entry"/"asset exit" to "inbound order"/"outbound order" across the four views: page titles, hero copy, action links/buttons, card headings, success/error messages, the order-history type badges, the empty state, and the loading fallbacks.
+2. Left the API/domain identifiers untouched (`exit_type`/`Exit type`, the `inbound`/`outbound` kind values, and the routes). No data or behavior change.
+
+Validation performed:
+1. Exemption: this is a copy-only change with no functional behaviour (per `.agents/rules/test-coverage.md`), so no new tests are required.
+2. `npm run lint` in `uis/backoffice` passed.
+3. `npm run build` in `uis/backoffice` passed; all four `/inventory/*` routes generated.
+
+Remaining risks / notes:
+1. The CONTEXT document names the entities `AssetEntry`/`AssetExit`; the UI now uses the inbound/outbound order vocabulary requested by the developer. The underlying entity/route names are unchanged.
+
+# Supply Directory API launch path fix (2026-10-08)
+
+Scope changed:
+1. `backrooms/services/Supply_directory_API/main.py` — added a `sys.path` bootstrap that puts `backrooms/` on the path before the absolute `services.*` imports.
+2. `memory-bank/progress.md`.
+
+What changed:
+1. `main.py` and every internal module import via `services.Supply_directory_API.*`, which requires the `backrooms/` directory on `sys.path`. Launching `uvicorn main:app` from inside `Supply_directory_API/` (or any cwd that is not `backrooms/`) raised `ModuleNotFoundError: No module named 'services'` because only the service folder was importable.
+2. Added a bootstrap mirroring `Inventory-API/main.py`: `BACKROOMS_ROOT = Path(__file__).resolve().parent.parent.parent` is inserted into `sys.path` before the `services.*` imports. This lets the app be launched directly with `python -m uvicorn main:app` from the service folder while preserving the `services.Supply_directory_API.main` import path used by pytest. No behavior change.
+
+Validation performed:
+1. `uv run python -m py_compile Supply_directory_API/main.py` passed.
+2. Import smoke from `backrooms/`: `from services.Supply_directory_API.main import app` printed `Nexova Supplier Directory API`.
+3. Top-level launch import from the service folder: `python -c "import main"` (outer venv) printed `Nexova Supplier Directory API`.
+4. Live server on port 8123: `GET /` returned `{"status":"ok","service":"supplier-directory"}` and `/openapi.json` listed every route (`/auth/*`, `/users*`, `/profiles/me`, `/suppliers*`).
+5. `uv run pytest` passed 124/124.
+
+Remaining risks / notes:
+1. Recommended launch command uses the project venv that contains uvicorn: from `backrooms/services` run `uv run uvicorn services.Supply_directory_API.main:app --reload --app-dir ..`. The inner `backrooms/services/Supply_directory_API/.venv` exists but lacks `uvicorn`, so `uv run` from inside the service folder picks an incomplete environment — use the shared `backrooms/services` venv.
+2. The Supplier Directory API and the Inventory API both default to port 8000; run the Inventory service with `--port 8001` to match the backoffice `NEXT_PUBLIC_INVENTORY_API_URL`.
+
+# Milestone 5 Nexova inventory management UI (2026-10-08)
+
+Scope changed:
+1. `uis/backoffice/lib/inventory.ts` (new) — typed integration module for every `/inventory` call.
+2. `uis/backoffice/components/backoffice/BackofficeShell.tsx` (new) — shared nav/header/content shell.
+3. `uis/backoffice/app/inventory/products/page.tsx`, `app/inventory/orders/page.tsx`, `app/inventory/orders/inbound/page.tsx`, `app/inventory/orders/outbound/page.tsx` (new).
+4. `uis/backoffice/app/globals.css` — added `.bo-*` shell styles and `.inventory-*` view styles.
+5. `uis/backoffice/app/suppliers/page.tsx`, `app/incidents/page.tsx` — migrated to `BackofficeShell`.
+6. `uis/backoffice/app/page.tsx` — added an Inventory link to the overview sidebar.
+7. `uis/backoffice/.env.example` — added `NEXT_PUBLIC_INVENTORY_API_URL`.
+8. `jest.config.js` (roots now include `uis/backoffice`), `uis/backoffice/tsconfig.json` (exclude `__tests__`).
+9. `uis/backoffice/lib/__tests__/inventory.test.ts` (new).
+10. `memory-bank/progress.md`.
+
+What changed:
+1. `lib/inventory.ts` centralises all API access (no component calls `fetch`). It reuses `authorizedFetch` for the bearer token and 401 redirect, exposes `listAssets`, `listOrders`, `createInboundOrder`, `createOutboundOrder`, a `parseApiError` helper for `detail` string/array payloads, and a pure `stockLevel` helper with documented thresholds (0 = out, 1–9 = low, ≥10 = healthy).
+2. Built the four context-mandated views with Nexova domain labels (Asset, asset entry, asset exit, SKU, office): products with colour-coded stock indicators and per-row entry/exit links; inbound form (asset selector by name, success clears + confirms, visible errors); outbound form (reactive available-stock readout, client over-stock warning, inline `400` message near quantity); read-only order history with inbound/outbound distinction, quantity, date, and `user_uuid`.
+3. Extracted `BackofficeShell` (brand, numbered nav with `usePathname` active state, connected-status line, page header, content slot) and migrated the supplier and incident pages onto it. The home dashboard keeps its distinct metrics layout and only gained an Inventory link.
+4. Route protection is unchanged: the existing global `AuthGuard` already redirects unauthenticated users on all non-public paths, so no per-page guard was added.
+5. Added the backoffice to the root Jest `roots` and a happy/edge/failure suite for the integration module (stock thresholds, error parsing, and mocked-fetch happy + `400` failure paths). Used `@jest/globals` imports to stay lint/type-safe; `__tests__` is excluded from the Next build typecheck.
+
+Validation performed:
+1. `npx jest` from the repo root passed 28/28 across 4 suites (17 existing tracker tests + 11 new inventory tests).
+2. `npm run lint` in `uis/backoffice` passed with no errors or warnings.
+3. `npm run build` in `uis/backoffice` passed and generated `/inventory/products`, `/inventory/orders`, `/inventory/orders/inbound`, and `/inventory/orders/outbound` alongside the existing routes.
+
+Remaining risks / notes:
+1. The Inventory API is a separate service from the auth/supplier API, so the backoffice needs `NEXT_PUBLIC_INVENTORY_API_URL` (default `http://localhost:8001`). The service's `INVENTORY_ALLOWED_ORIGINS` already allows `localhost:3000/3001`, and the Inventory API shares `JWT_SECRET_KEY` with the Supply Directory auth so the same login token authorises writes.
+2. The old `.supplier-nav`/`.incident-nav` shell rules remain in `globals.css` but are now unused (the shell owns that markup); removing them is a low-risk cleanup follow-up.
+3. `parseApiError` is now duplicated in `lib/inventory.ts` (also present in `lib/auth/session.ts` and `app/suppliers/page.tsx`); extracting one shared helper remains a candidate.
+4. No live API or browser end-to-end run was performed in this session — the pages were validated via typecheck, lint, build, and unit tests only.
+
+
+# Milestone 5 Nexova inventory API with SQLModel + Supabase (2026-10-07)
+
+Scope changed:
+1. `backrooms/services/Inventory-API/` (new) — `main.py`, `database.py`, `models.py`, `schemas.py`, `routers/inventory.py`, `seed.py`, `.env.example`, `tests/`.
+2. `backrooms/services/Inventory-API/.env` — replaced the loose `SUPABASE_URL` with the CONTEXT-required `DATABASE_URL` (Transaction pooler URI). Developer approved editing this protected file.
+3. `backrooms/services/pyproject.toml` — added `Inventory-API/tests` to pytest `testpaths` and `Inventory-API` to coverage `source`.
+4. `backrooms/services/Supply_directory_API/models.py` — added a `uuid` field to `User`/`UserResponse` (inherited by `AuthenticatedUser`).
+5. `backrooms/services/Supply_directory_API/auth/services.py` — `get_user_by_id`/`get_user_by_email`/`get_user_entry_by_email` now lazily backfill a UUID for legacy user documents.
+6. `testing.md`, `memory-bank/progress.md`.
+
+What changed:
+1. Standalone FastAPI service (the folder name has a hyphen, so it runs as an app root rather than an importable package) registering one `APIRouter(prefix="/inventory")` with the six CONTEXT endpoints: list/create/get assets and inbound/outbound/orders.
+2. `Asset`, `AssetEntry`, `AssetExit` SQLModel models; `asset_id` is a database-level FK to `assets.id`. `current_stock` is never stored — it is computed with a single grouped aggregate per order table (no N+1) as `SUM(entries) − SUM(exits)`.
+3. Separate Pydantic schemas (`schemas.py`); endpoints never return raw ORM objects. `AssetExitCreate` enforces allocation⇒`assigned_to` and consumption⇒null.
+4. Outbound orders that would exceed stock are rejected with `HTTP 400` and the exact CONTEXT message before any row is written. Every order stores `current_user.uuid` sourced from TinyDB.
+5. Dual DB in one app: it reuses `services.Supply_directory_API.auth.dependencies.get_current_user` (TinyDB) and a per-request SQLModel `Session` via `Depends(get_sql_session)` (Supabase). `SQLModel.metadata.create_all(engine)` runs in the FastAPI lifespan.
+6. `database.py` pins `postgresql+psycopg2` because SQLAlchemy 2.1 otherwise resolves a bare `postgresql://` URL to psycopg v3, which is not installed.
+7. `seed.py` seeds 6 assets, 5 entries, and 3 exits (idempotent) matching the CONTEXT tables.
+8. Reads are public; writes require the TinyDB bearer token, per the milestone rule and the Nexova CONTEXT.
+
+Validation performed:
+1. `uv run pytest --cov` from `backrooms/services` passed 124/124 (108 existing + 16 new). Inventory coverage: `routers/inventory.py` 100%, `schemas.py` 100%, `models.py` 100%, `database.py` 90%, `main.py` 92%, `seed.py` 86%; suite total 94%.
+2. `uv run python -m py_compile` passed for every new module.
+3. Existing authentication suites still pass after the `User.uuid` change.
+4. `git diff --check` passed (only benign LF→CRLF notices); recompiled tracked `Supply_directory_API/**/__pycache__/*.pyc` restored; `.env` confirmed gitignored.
+5. Live Supabase validation (transaction pooler): `DATABASE_URL` connected, `uv run python seed.py` created the schema and inserted 6 assets / 5 entries / 3 exits, and an end-to-end `TestClient` smoke returned `GET /inventory/products` net stock `NXV-IT-001=12, NXV-PER-001=15, NXV-PER-002=15, NXV-OFF-001=38` with `GET /inventory/orders` = 8, matching the CONTEXT seed math. `inspect(engine)` confirmed `assets`, `asset_entries`, `asset_exits` exist with `asset_entries.asset_id` FK → `assets`.
+
+Remaining risks / notes:
+1. RESOLVED — the initial `password authentication failed for user "postgres"` was caused by stray square brackets around the password in `DATABASE_URL` (`[Gannendorf777]`). Stripping them fixed the connection; the corrected value is now in `Inventory-API/.env`.
+2. The connected Supabase MCP points at a different project (`lawkjzjxxtxxmsnakazx`) than the one in `.env` (`jrznvxqznekzvwcqwycu`); no MCP DDL was applied to avoid writing to the wrong project.
+3. `create_all` is dev-only per the milestone warning; adopt Alembic before production.
+4. Tests run on SQLite rather than Postgres; FK/unique semantics are asserted at route level plus the DB constraints created by `create_all`.
+
+# Test-coverage rule for functional changes (2026-10-07)
+
+Scope changed:
+1. `.agents/rules/test-coverage.md` (new) — always-active rule requiring happy, edge, and failure tests for every functional code change, with documented exemptions and anti-patterns.
+2. `AGENTS.md` — added the rule to the commit workflow (new step 4, steps renumbered) and to the section 5 required rule discovery list.
+
+What changed:
+1. Added a monorepo-wide rule mandating that functional code changes (business logic, API routes, utilities, components, data transforms) ship add-or-update automated tests in the same change, each with a happy case, an edge case, and a failure case, asserting business behaviour rather than serialisation. Tests follow existing conventions (pytest in `backrooms/services`, Jest in `uis/talent-pipeline-tracker/__tests__`), and the targeted suite must be run and its result captured before the progress update and commit.
+2. Documented exemptions (docs/markdown, CSS/styling, config/static markup with no logic, trivial copy changes) that must be stated in the progress entry when used.
+3. Wired the rule into `AGENTS.md` section 2 (step 4, renumbering the later steps) and section 5 (required read list).
+
+Validation performed:
+1. Exemption declared: this change is governance-only (markdown docs plus one contract file), adding no functional behaviour, so under the new rule itself no tests are required.
+2. `git diff --check` on the changed files (to be run at commit time) — no whitespace errors expected.
+
+Remaining risks / notes:
+1. `scripts/` and `uis/landing_page` currently have no test harness. Future functional changes there will trigger the rule and require either a harness or a documented exemption; no harness was added in this pass.
+2. The rule is a policy contract, not an automated gate; enforcement relies on agents following `AGENTS.md` and reviewers checking.
+
 # FE-019 frontend utility test suite (2026-09-22)
 
 Scope changed:

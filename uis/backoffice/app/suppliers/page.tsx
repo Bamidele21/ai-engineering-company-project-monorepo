@@ -1,8 +1,8 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { BackofficeShell } from "@/components/backoffice/BackofficeShell";
 import { authorizedFetch } from "@/lib/auth/client";
 
 type SupplierCountry = "Spain" | "USA";
@@ -372,40 +372,14 @@ export default function SuppliersPage() {
   };
 
   return (
-    <main className="supplier-page">
-      <aside className="supplier-nav">
-        <Link className="supplier-brand" href="/">
-          <b>N</b>
-          <span>
-            <strong>Nexova</strong>
-            <small>Operations studio</small>
-          </span>
-        </Link>
-        <nav aria-label="Backoffice navigation">
-          <Link href="/" className="supplier-nav-link">
-            01  Overview
-          </Link>
-          <Link href="/suppliers" className="supplier-nav-link active">
-            02  Supplier directory
-          </Link>
-          <Link href="/incidents" className="supplier-nav-link">
-            03  Incident analyzer
-          </Link>
-        </nav>
-        <small className="supplier-connected">● Supplier API connected locally</small>
-      </aside>
-
-      <section className="supplier-main">
-        <header className="supplier-header">
-          <div>
-            <p>Human resources operations / Nexova</p>
-            <h1>Supplier directory</h1>
-          </div>
-          <span>PS</span>
-        </header>
-
-        <div className="supplier-content">
-          <section className="supplier-hero" id="list">
+    <BackofficeShell
+      eyebrow="Human resources operations / Nexova"
+      title="Supplier directory"
+      initials="PS"
+      connectedLabel="Supplier API connected locally"
+      pageClassName="supplier-page"
+    >
+        <section className="supplier-hero" id="list">
             <div>
               <p>01 / Directory</p>
               <h2>Single source of truth for recurrent supplier contracts.</h2>
@@ -740,8 +714,6 @@ export default function SuppliersPage() {
               </button>
             </form>
           </section>
-        </div>
-      </section>
-    </main>
+    </BackofficeShell>
   );
 }

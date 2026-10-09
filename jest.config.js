@@ -1,7 +1,10 @@
 /** @type {import('jest').Config} */
 module.exports = {
   testEnvironment: "node",
-  roots: ["<rootDir>/uis/talent-pipeline-tracker"],
+  roots: [
+    "<rootDir>/uis/talent-pipeline-tracker",
+    "<rootDir>/uis/backoffice",
+  ],
   testMatch: ["**/__tests__/**/*.test.ts"],
   transform: {
     "^.+\\.tsx?$": [

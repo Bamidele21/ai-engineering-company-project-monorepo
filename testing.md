@@ -133,6 +133,30 @@ rejection, and salted bcrypt verification.
   hides whether a user id exists); non-admin role change returns `403`;
   unauthenticated returns `401`.
 
+## Inventory API (Milestone 5)
+
+Located in `backrooms/services/Inventory-API/tests/` and run with the same
+`uv run pytest` suite. The service connects to Supabase (SQLModel) plus the
+existing TinyDB auth; tests swap the Supabase engine for an isolated in-memory
+SQLite engine, so they never touch the remote database.
+
+### `test_inventory.py` — `/inventory`
+
+- Happy: a new asset starts at zero stock; inbound increases it; outbound
+  allocation/consumption decrements it; every order records the authenticated
+  TinyDB user's UUID; `GET /orders` returns asset data for both kinds.
+- Edge: both offices coexist and stock is per asset; consumption with a null
+  `assigned_to` is allowed; duplicate SKU returns `409`; unknown asset `404`.
+- Failure: `allocation` without `assigned_to` and `consumption` with it return
+  `422`; an outbound exceeding stock returns `400` with the exact CONTEXT message
+  and persists nothing; unauthenticated writes return `401`.
+
+### `test_seed.py` — `seed.py`
+
+- Happy: seeds 6 assets, 5 entries, and 3 exits with net stock `entries − exits`.
+- Edge: re-running the seed is idempotent (record counts unchanged).
+- Failure: when assets already exist the seed skips without overwriting.
+
 ## Frontend utility functions (FE-019)
 
 Located in `uis/talent-pipeline-tracker/__tests__/` and run with Jest.
@@ -161,6 +185,20 @@ ticket. Coverage for the tested helpers is `lib/labels.ts` 100% and
 `lib/auth/storage.ts` 88%; `lib/auth/session.ts` appears lower overall only
 because the other exported functions in that module (login, register, etc.) are
 async fetch flows outside FE-019's scope.
+
+### `inventory.test.ts` — `uis/backoffice/lib/inventory.ts` (Milestone 5 UI)
+
+Located in `uis/backoffice/lib/__tests__/` and collected by the root Jest
+`roots` list (now includes `uis/backoffice`).
+
+- Happy: `stockLevel` returns `healthy` at 10+ units; `createInboundOrder` and
+  `createOutboundOrder` POST the payload to the correct `/inventory` path and
+  return the created record.
+- Edge: `stockLevel` returns `low` for 1-9 and `out` for 0 (and defensively for
+  negatives); `parseApiError` joins an array `detail` into one sentence.
+- Failure: `listAssets` throws the API `detail` on a non-2xx response;
+  `createOutboundOrder` surfaces the insufficient-stock `400` message;
+  `parseApiError` falls back for null, empty, and non-object payloads.
 
 ## Coverage results
 
