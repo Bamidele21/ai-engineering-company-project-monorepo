@@ -1,0 +1,7 @@
+# Build-context exclusions for the Nexova UI image.
+**/node_modules
+**/.next
+**/.env
+**/.env.*
+**/*.log
+**/.vercel

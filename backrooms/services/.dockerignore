@@ -1,0 +1,11 @@
+# Build-context exclusions for the Nexova backend image.
+__pycache__/
+*.pyc
+.env
+.env.*
+tests/
+*.log
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
