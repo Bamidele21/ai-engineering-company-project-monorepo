@@ -5,9 +5,7 @@ from the four raw reports in this folder. No code or configuration was changed t
 this document is the **measure → analyse** half of the audit loop and is the reference the
 `REPORT.md` "after" comparison will be measured against.
 
-> Naming: this baseline is `pre-performance-audit.md`. The challenge deliverables are `AUDIT.md`
-> (analysis) and `REPORT.md` (applied corrections + measured impact); this file is the raw,
-> unfiltered evidence behind `AUDIT.md`.
+
 
 ---
 

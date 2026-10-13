@@ -111,8 +111,3 @@ Common root causes students overlook: unoptimised images, render-blocking resour
 
 ## 📦 How to Submit
 
-Push your changes to your company monorepo on GitHub and share the repository URL according to your instructor's instructions. Make sure `AUDIT.md`, `REPORT.md`, and the `/audit/` folder with all screenshots are included in the final commit.
-
----
-
-This and many other projects are built by students as part of the [Career Programs](https://4geeksacademy.com/compare-programs) at [4Geeks Academy](https://4geeksacademy.com). By [@marcogonzalo](https://github.com/marcogonzalo) and [other contributors](https://github.com/4GeeksAcademy/frontend-performance-audit/graphs/contributors). Find out more about [AI Engineering](https://4geeksacademy.com/en/coding-bootcamps/ai-engineering), [Data Science & Machine Learning](https://4geeksacademy.com/en/coding-bootcamps/data-science-ml), [Cybersecurity](https://4geeksacademy.com/en/coding-bootcamps/cybersecurity) and [Full-Stack Software Developer with AI](https://4geeksacademy.com/en/coding-bootcamps/full-stack-developer).
