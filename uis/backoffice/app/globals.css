@@ -26,7 +26,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar-nav { display: grid; gap: 8px; }
 .nav-item { align-items: center; border-left: 2px solid transparent; color: #9eb2b1; display: flex; font-size: 13px; gap: 12px; padding: 12px 10px; transition: background .2s, color .2s; }
 .nav-item:hover, .nav-item-active { background: #1f3b40; border-left-color: var(--orange); color: #fff; }
-.nav-icon { color: #6f8889; font-size: 10px; letter-spacing: .1em; }
+.nav-icon { color: #7f9a9b; font-size: 10px; letter-spacing: .1em; }
 .nav-item-active .nav-icon { color: var(--orange); }
 .sidebar-footer { align-items: center; color: #789292; display: flex; font-size: 11px; gap: 8px; margin-top: auto; }
 .online-dot { background: #51c79a; border-radius: 50%; display: inline-block; height: 7px; width: 7px; }

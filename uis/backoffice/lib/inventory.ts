@@ -1,3 +1,4 @@
+import { parseApiError } from "./api/errors";
 import { authorizedFetch } from "./auth/client";
 
 // Base URL of the Nexova Inventory API (a service separate from the auth /
@@ -105,33 +106,6 @@ export function stockLevel(stock: number): StockLevel {
   }
 
   return "healthy";
-}
-
-interface ApiErrorPayload {
-  detail?: string | Array<{ msg?: string }>;
-}
-
-export function parseApiError(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== "object") {
-    return fallback;
-  }
-
-  const errorPayload = payload as ApiErrorPayload;
-  if (typeof errorPayload.detail === "string") {
-    return errorPayload.detail;
-  }
-
-  if (Array.isArray(errorPayload.detail)) {
-    const messages = errorPayload.detail
-      .map((entry) => entry.msg)
-      .filter((entry): entry is string => Boolean(entry));
-
-    if (messages.length > 0) {
-      return messages.join(". ");
-    }
-  }
-
-  return fallback;
 }
 
 async function readJson(response: Response): Promise<unknown> {

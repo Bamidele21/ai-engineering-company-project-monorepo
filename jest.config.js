@@ -4,6 +4,7 @@ module.exports = {
   roots: [
     "<rootDir>/uis/talent-pipeline-tracker",
     "<rootDir>/uis/backoffice",
+    "<rootDir>/uis/website",
   ],
   testMatch: ["**/__tests__/**/*.test.ts"],
   transform: {

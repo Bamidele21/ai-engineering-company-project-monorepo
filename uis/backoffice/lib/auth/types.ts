@@ -3,14 +3,11 @@ export type UserRole = "admin" | "manager" | "user";
 export interface AuthUser {
   id: number;
   email: string;
-  is_active: boolean;
   role: UserRole;
-  created_at: string;
 }
 
 export interface Profile {
   id: number;
-  user_id: number;
   name: string;
   phone: string | null;
   address: string | null;

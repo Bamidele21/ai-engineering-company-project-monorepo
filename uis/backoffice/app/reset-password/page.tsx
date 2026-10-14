@@ -3,6 +3,13 @@
 import { FormEvent, Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  AUTH_INPUT_CLASS,
+  AUTH_SUBMIT_CLASS,
+  AuthAlert,
+  AuthCard,
+} from "@/components/auth/AuthCard";
+import { useAuthSubmit } from "@/hooks/useAuthSubmit";
 import { resetPassword } from "@/lib/auth/session";
 
 function ResetPasswordForm() {
@@ -16,12 +23,11 @@ function ResetPasswordForm() {
     password?: string;
     confirmPassword?: string;
   }>({});
-  const [formError, setFormError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const { formError, isSubmitting, run } = useAuthSubmit();
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setFormError("");
 
     const nextErrors: { password?: string; confirmPassword?: string } = {};
     if (password.length < 8) {
@@ -36,117 +42,86 @@ function ResetPasswordForm() {
       return;
     }
 
-    setIsSubmitting(true);
-
-    try {
-      await resetPassword({ token, newPassword: password });
-      router.replace("/login?reset=success");
-    } catch (resetError) {
-      setFormError(
-        resetError instanceof Error
-          ? resetError.message
-          : "This reset link is invalid or has expired. Request a new one."
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
+    await run({
+      fallback: "This reset link is invalid or has expired. Request a new one.",
+      action: async () => {
+        await resetPassword({ token, newPassword: password });
+        router.replace("/login?reset=success");
+      },
+    });
   };
 
-  const inputClass =
-    "rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-teal-600 focus:outline-none";
-
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-12">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
-          Nexova backoffice
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold text-slate-900">
-          Choose a new password
-        </h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Pick a password with at least 8 characters.
-        </p>
-
-        {!token ? (
-          <div className="mt-6 grid gap-4">
-            <p
-              className="rounded-md border-l-4 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700"
-              role="alert"
-            >
-              This reset link is missing its token. Request a new link.
-            </p>
-            <Link
-              href="/forgot-password"
-              className="justify-self-start font-semibold text-teal-700"
-            >
-              Request a new reset link
-            </Link>
-          </div>
-        ) : (
-          <form className="mt-6 grid gap-4" onSubmit={handleSubmit} noValidate>
-            <label className="grid gap-1.5 text-sm font-medium text-slate-700">
-              New password
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className={inputClass}
-                required
-              />
-              {fieldErrors.password ? (
-                <span className="text-xs font-normal text-red-600">
-                  {fieldErrors.password}
-                </span>
-              ) : null}
-            </label>
-
-            <label className="grid gap-1.5 text-sm font-medium text-slate-700">
-              Confirm new password
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                className={inputClass}
-                required
-              />
-              {fieldErrors.confirmPassword ? (
-                <span className="text-xs font-normal text-red-600">
-                  {fieldErrors.confirmPassword}
-                </span>
-              ) : null}
-            </label>
-
-            {formError ? (
-              <div className="grid gap-1">
-                <p
-                  className="rounded-md border-l-4 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700"
-                  role="alert"
-                >
-                  {formError}
-                </p>
-                <Link
-                  href="/forgot-password"
-                  className="text-sm font-semibold text-teal-700"
-                >
-                  Request a new reset link
-                </Link>
-              </div>
+    <AuthCard
+      title="Choose a new password"
+      subtitle="Pick a password with at least 8 characters."
+    >
+      {!token ? (
+        <div className="mt-6 grid gap-4">
+          <AuthAlert>
+            This reset link is missing its token. Request a new link.
+          </AuthAlert>
+          <Link
+            href="/forgot-password"
+            className="justify-self-start font-semibold text-teal-700"
+          >
+            Request a new reset link
+          </Link>
+        </div>
+      ) : (
+        <form className="mt-6 grid gap-4" onSubmit={handleSubmit} noValidate>
+          <label className="grid gap-1.5 text-sm font-medium text-slate-700">
+            New password
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className={AUTH_INPUT_CLASS}
+              required
+            />
+            {fieldErrors.password ? (
+              <span className="text-xs font-normal text-red-600">
+                {fieldErrors.password}
+              </span>
             ) : null}
+          </label>
 
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isSubmitting ? "Updating..." : "Set new password"}
-            </button>
-          </form>
-        )}
-      </div>
-    </main>
+          <label className="grid gap-1.5 text-sm font-medium text-slate-700">
+            Confirm new password
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              className={AUTH_INPUT_CLASS}
+              required
+            />
+            {fieldErrors.confirmPassword ? (
+              <span className="text-xs font-normal text-red-600">
+                {fieldErrors.confirmPassword}
+              </span>
+            ) : null}
+          </label>
+
+          {formError ? (
+            <div className="grid gap-1">
+              <AuthAlert>{formError}</AuthAlert>
+              <Link
+                href="/forgot-password"
+                className="text-sm font-semibold text-teal-700"
+              >
+                Request a new reset link
+              </Link>
+            </div>
+          ) : null}
+
+          <button type="submit" disabled={isSubmitting} className={AUTH_SUBMIT_CLASS}>
+            {isSubmitting ? "Updating..." : "Set new password"}
+          </button>
+        </form>
+      )}
+    </AuthCard>
   );
 }
 

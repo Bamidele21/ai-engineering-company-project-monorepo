@@ -1,121 +1,22 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-
-type FormValues = {
-  fullName: string;
-  email: string;
-  phone: string;
-  country: string;
-  experience: string;
-  sector: string;
-  english: string;
-  availability: string;
-  linkedin: string;
-  comments: string;
-  policy: boolean;
-};
-
-type FormErrors = Partial<Record<keyof FormValues, string>>;
-
-const INITIAL_VALUES: FormValues = {
-  fullName: "",
-  email: "",
-  phone: "",
-  country: "",
-  experience: "",
-  sector: "",
-  english: "",
-  availability: "",
-  linkedin: "",
-  comments: "",
-  policy: false,
-};
-
-function validateField(name: keyof FormValues, values: FormValues): string {
-  const fullName = values.fullName.trim();
-  const email = values.email.trim();
-  const phone = values.phone.trim();
-  const linkedin = values.linkedin.trim();
-  const experience = Number(values.experience);
-  const remaining = 500 - values.comments.length;
-
-  if (name === "fullName") {
-    if (!/^\S+\s+\S+/.test(fullName)) {
-      return "Name must contain at least first and last name";
-    }
-  }
-
-  if (name === "email") {
-    if (!/^\S+@\S+\.\S+$/.test(email)) {
-      return "Enter a valid email (example: name@company.com)";
-    }
-  }
-
-  if (name === "phone") {
-    if (!/^\+\d{1,3}\s?\d{3,}$/.test(phone)) {
-      return "Phone must include country code (example: +34 612 345 678)";
-    }
-  }
-
-  if (name === "country") {
-    if (!values.country) {
-      return "Select your country of residence";
-    }
-  }
-
-  if (name === "experience") {
-    if (Number.isNaN(experience) || experience < 0 || experience > 50) {
-      return "Years of experience must be between 0 and 50";
-    }
-  }
-
-  if (name === "sector") {
-    if (!values.sector) {
-      return "Select your sector of interest";
-    }
-  }
-
-  if (name === "english") {
-    if (!values.english) {
-      return "Indicate your English level";
-    }
-  }
-
-  if (name === "availability") {
-    if (!values.availability) {
-      return "Select your availability";
-    }
-  }
-
-  if (name === "linkedin") {
-    if (linkedin && !/^https?:\/\//.test(linkedin)) {
-      return "If you include LinkedIn, it must be a valid URL";
-    }
-  }
-
-  if (name === "comments") {
-    if (values.comments.length > 500) {
-      return `Comments cannot exceed 500 characters (${remaining} remaining)`;
-    }
-  }
-
-  if (name === "policy") {
-    if (!values.policy) {
-      return "You must accept the data processing policy to continue";
-    }
-  }
-
-  return "";
-}
+import { useEffect, useState } from "react";
+import SiteFooter from "../../components/SiteFooter";
+import SiteHeader from "../../components/SiteHeader";
+import { useApplicationForm } from "../../hooks/useApplicationForm";
 
 export default function ApplicationPage() {
-  const [values, setValues] = useState<FormValues>(INITIAL_VALUES);
-  const [errors, setErrors] = useState<FormErrors>({});
+  const {
+    values,
+    errors,
+    commentsRemaining,
+    setFieldValue,
+    setFieldAndValidate,
+    handleBlur,
+    validate,
+    reset,
+  } = useApplicationForm();
   const [isSuccessOpen, setIsSuccessOpen] = useState(false);
-
-  const commentsRemaining = useMemo(() => 500 - values.comments.length, [values.comments]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -142,92 +43,28 @@ export default function ApplicationPage() {
     };
   }, [isSuccessOpen]);
 
-  function setFieldValue(name: keyof FormValues, value: string | boolean) {
-    setValues((current) => ({
-      ...current,
-      [name]: value,
-    }));
-  }
-
-  function validateAndSetField(name: keyof FormValues, nextValues: FormValues) {
-    const message = validateField(name, nextValues);
-
-    setErrors((current) => ({
-      ...current,
-      [name]: message,
-    }));
-  }
-
-  function validateAll(currentValues: FormValues): FormErrors {
-    const nextErrors: FormErrors = {};
-
-    (Object.keys(currentValues) as (keyof FormValues)[]).forEach((key) => {
-      const message = validateField(key, currentValues);
-      if (message) {
-        nextErrors[key] = message;
-      }
-    });
-
-    return nextErrors;
-  }
-
-  function handleBlur(name: keyof FormValues) {
-    validateAndSetField(name, values);
-  }
-
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const nextErrors = validateAll(values);
-    setErrors(nextErrors);
+    const nextErrors = validate();
 
     if (Object.keys(nextErrors).length > 0) {
       setIsSuccessOpen(false);
       return;
     }
 
-    setValues(INITIAL_VALUES);
-    setErrors({});
+    reset();
     setIsSuccessOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function handleReset() {
-    setValues(INITIAL_VALUES);
-    setErrors({});
+    reset();
     setIsSuccessOpen(false);
   }
 
   return (
     <>
-      <header className="sticky top-0 z-20 w-full border-b border-orange-200 bg-orange-50/90 backdrop-blur">
-        <nav className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <Link href="/" className="text-xl font-bold tracking-tight sm:text-2xl">
-            Nexova
-          </Link>
-          <ul className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-sm text-orange-900 sm:justify-end sm:space-x-6 sm:text-base md:text-lg">
-            <li>
-              <Link href="/#home" className="hover:text-rose-600">
-                Home
-              </Link>
-            </li>
-            <li>
-              <Link href="/#services" className="hover:text-rose-600">
-                Services
-              </Link>
-            </li>
-            <li>
-              <Link href="/#why" className="hover:text-rose-600">
-                Talent
-              </Link>
-            </li>
-            <li>
-              <Link href="/#contact" className="hover:text-rose-600">
-                Contact
-              </Link>
-            </li>
-          </ul>
-        </nav>
-      </header>
+      <SiteHeader linkMode="route" />
 
       <main className="mx-auto w-full max-w-2xl px-4 py-10 sm:px-6 sm:py-12">
         <section className="mb-8">
@@ -313,11 +150,7 @@ export default function ApplicationPage() {
               <select
                 id="country"
                 value={values.country}
-                onChange={(event) => {
-                  const nextValues = { ...values, country: event.target.value };
-                  setValues(nextValues);
-                  validateAndSetField("country", nextValues);
-                }}
+                onChange={(event) => setFieldAndValidate("country", event.target.value)}
                 className="w-full rounded border border-orange-300 bg-white px-3 py-2 text-orange-950"
                 required
               >
@@ -359,11 +192,7 @@ export default function ApplicationPage() {
               <select
                 id="sector"
                 value={values.sector}
-                onChange={(event) => {
-                  const nextValues = { ...values, sector: event.target.value };
-                  setValues(nextValues);
-                  validateAndSetField("sector", nextValues);
-                }}
+                onChange={(event) => setFieldAndValidate("sector", event.target.value)}
                 className="w-full rounded border border-orange-300 bg-white px-3 py-2 text-orange-950"
                 required
               >
@@ -384,11 +213,7 @@ export default function ApplicationPage() {
               <select
                 id="english"
                 value={values.english}
-                onChange={(event) => {
-                  const nextValues = { ...values, english: event.target.value };
-                  setValues(nextValues);
-                  validateAndSetField("english", nextValues);
-                }}
+                onChange={(event) => setFieldAndValidate("english", event.target.value)}
                 className="w-full rounded border border-orange-300 bg-white px-3 py-2 text-orange-950"
                 required
               >
@@ -419,14 +244,7 @@ export default function ApplicationPage() {
                       className="mr-2"
                       value={option}
                       checked={values.availability === option}
-                      onChange={(event) => {
-                        const nextValues = {
-                          ...values,
-                          availability: event.target.value,
-                        };
-                        setValues(nextValues);
-                        validateAndSetField("availability", nextValues);
-                      }}
+                      onChange={(event) => setFieldAndValidate("availability", event.target.value)}
                       required
                     />
                     {option}
@@ -463,11 +281,7 @@ export default function ApplicationPage() {
                 rows={3}
                 maxLength={700}
                 value={values.comments}
-                onChange={(event) => {
-                  const nextValues = { ...values, comments: event.target.value };
-                  setValues(nextValues);
-                  validateAndSetField("comments", nextValues);
-                }}
+                onChange={(event) => setFieldAndValidate("comments", event.target.value)}
                 className="w-full rounded border border-orange-300 bg-white px-3 py-2 text-orange-950 placeholder:text-orange-400"
                 placeholder="Max 500 characters"
               />
@@ -486,11 +300,7 @@ export default function ApplicationPage() {
               id="policy"
               className="mr-2"
               checked={values.policy}
-              onChange={(event) => {
-                const nextValues = { ...values, policy: event.target.checked };
-                setValues(nextValues);
-                validateAndSetField("policy", nextValues);
-              }}
+              onChange={(event) => setFieldAndValidate("policy", event.target.checked)}
               required
             />
             <label htmlFor="policy" className="font-medium">
@@ -502,7 +312,7 @@ export default function ApplicationPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <button
               type="submit"
-              className="w-full rounded-lg bg-rose-500 py-3 font-semibold text-white shadow transition hover:bg-rose-400"
+              className="w-full rounded-lg bg-rose-600 py-3 font-semibold text-white shadow transition hover:bg-rose-500"
             >
               Submit Application
             </button>
@@ -516,29 +326,7 @@ export default function ApplicationPage() {
         </form>
       </main>
 
-      <footer className="mt-10 w-full border-t border-orange-300/40 bg-gradient-to-r from-rose-500 to-orange-500 py-6 text-orange-50">
-        <div className="mx-auto flex w-full max-w-7xl flex-col items-center justify-between px-4 text-center sm:px-6 md:flex-row md:text-left">
-          <span className="text-sm sm:text-base">© 2025 Nexova. All rights reserved.</span>
-          <div className="mt-4 flex space-x-6 text-amber-100 md:mt-0">
-            <a
-              href="https://linkedin.com/company/nexova"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-white"
-            >
-              LinkedIn
-            </a>
-            <a
-              href="https://instagram.com/nexova"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-white"
-            >
-              Instagram
-            </a>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
 
       <div className={`fixed inset-0 z-50 ${isSuccessOpen ? "" : "hidden"}`} aria-hidden={!isSuccessOpen}>
         <div
@@ -577,7 +365,7 @@ export default function ApplicationPage() {
               <button
                 type="button"
                 onClick={() => setIsSuccessOpen(false)}
-                className="rounded-lg bg-rose-500 px-5 py-2.5 font-semibold text-white hover:bg-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-300"
+                className="rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-300"
               >
                 Close
               </button>

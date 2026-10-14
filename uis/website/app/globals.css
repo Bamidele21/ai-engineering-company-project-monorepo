@@ -27,13 +27,13 @@ html {
 
 @keyframes heroPan {
   0% {
-    background-position: 50% 40%;
+    object-position: 50% 40%;
   }
   50% {
-    background-position: 50% 55%;
+    object-position: 50% 55%;
   }
   100% {
-    background-position: 50% 40%;
+    object-position: 50% 40%;
   }
 }
 

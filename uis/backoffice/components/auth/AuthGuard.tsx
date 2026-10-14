@@ -42,13 +42,23 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
-  if (!isReady) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
-        Checking your Nexova session...
-      </div>
-    );
-  }
-
-  return <>{children}</>;
+  // Render the route immediately so the largest contentful paint is not gated
+  // on the client-side token check; the guard only redirects when the session
+  // is missing. The status pill is non-blocking.
+  return (
+    <>
+      {children}
+      {!isReady ? (
+        <div
+          className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="rounded-full bg-slate-900/80 px-4 py-1.5 text-xs font-medium text-white shadow">
+            Checking your Nexova session...
+          </span>
+        </div>
+      ) : null}
+    </>
+  );
 }

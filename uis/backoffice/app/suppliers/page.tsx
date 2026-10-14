@@ -3,6 +3,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { BackofficeShell } from "@/components/backoffice/BackofficeShell";
+import { parseApiError } from "@/lib/api/errors";
 import { authorizedFetch } from "@/lib/auth/client";
 
 type SupplierCountry = "Spain" | "USA";
@@ -18,6 +19,9 @@ type SupplierCategory =
   | "office_and_facilities"
   | "it_and_software_licenses";
 
+// List projection returned by `GET /suppliers`. The detail/update responses
+// additionally carry `notes` and `updated_at`, which the directory table never
+// renders, so they are intentionally absent here.
 type SupplierRecord = {
   id: number;
   name: string;
@@ -25,11 +29,9 @@ type SupplierRecord = {
   categories: SupplierCategory[];
   monthly_rate: number;
   currency: "EUR" | "USD";
-  updated_at: string;
   status: SupplierStatus;
   contract_renewal_date: string | null;
   contact_email: string | null;
-  notes: string | null;
 };
 
 type SupplierCreatePayload = {
@@ -42,10 +44,6 @@ type SupplierCreatePayload = {
   contract_renewal_date?: string;
   contact_email?: string;
   notes?: string;
-};
-
-type ApiError = {
-  detail?: string | Array<{ msg?: string }>;
 };
 
 const SUPPLIERS_API_URL =
@@ -90,28 +88,6 @@ const INITIAL_FORM: NewSupplierForm = {
   contact_email: "",
   notes: "",
 };
-
-function parseApiError(errorPayload: unknown, fallback: string): string {
-  if (!errorPayload || typeof errorPayload !== "object") {
-    return fallback;
-  }
-
-  const payload = errorPayload as ApiError;
-  if (typeof payload.detail === "string") {
-    return payload.detail;
-  }
-
-  if (Array.isArray(payload.detail)) {
-    const collected = payload.detail
-      .map((entry) => entry.msg)
-      .filter((entry): entry is string => Boolean(entry));
-    if (collected.length > 0) {
-      return collected.join(". ");
-    }
-  }
-
-  return fallback;
-}
 
 function isRenewalWithin60Days(value: string | null): boolean {
   if (!value) {

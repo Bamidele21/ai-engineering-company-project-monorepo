@@ -3,7 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect } from "react";
-import Header from "../components/Header";
+import SiteFooter from "../components/SiteFooter";
+import SiteHeader from "../components/SiteHeader";
 
 const services = [
   {
@@ -131,19 +132,23 @@ export default function Home() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationSchema) }}
       />
-      <Header />
+      <SiteHeader linkMode="anchor" />
 
       <main>
         <section
           id="home"
-          className="hero-motion relative isolate overflow-hidden"
-          style={{
-            backgroundImage: "url('/assets/bphoto1.png')",
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-          }}
+          className="relative isolate overflow-hidden"
           aria-label="Hero section"
         >
+          <Image
+            src="/assets/bphoto1.png"
+            alt=""
+            fill
+            preload
+            fetchPriority="high"
+            sizes="100vw"
+            className="hero-motion object-cover"
+          />
           <div className="absolute inset-0 bg-rose-950/45" aria-hidden="true" />
           <div className="relative z-10 mx-auto w-full max-w-7xl px-4 py-20 sm:px-6 sm:py-24 md:py-32 lg:py-40">
             <div className="max-w-3xl">
@@ -156,7 +161,7 @@ export default function Home() {
               <div className="flex justify-center sm:justify-start">
                 <Link
                   href="/application"
-                  className="cta-pulse inline-block rounded-lg bg-rose-500 px-6 py-3 font-semibold text-white shadow transition hover:bg-rose-400"
+                  className="cta-pulse inline-block rounded-lg bg-rose-600 px-6 py-3 font-semibold text-white shadow transition hover:bg-rose-500"
                 >
                   Join our talent pool
                 </Link>
@@ -184,6 +189,7 @@ export default function Home() {
                   alt={service.imageAlt}
                   width={800}
                   height={400}
+                  sizes="(min-width: 768px) 33vw, 100vw"
                   className="service-image mb-4 h-40 w-full rounded-md object-cover"
                 />
                 <h3 className="mb-2 text-xl font-semibold text-orange-900">{service.title}</h3>
@@ -220,6 +226,7 @@ export default function Home() {
               alt="Nexova experience"
               width={1000}
               height={900}
+              sizes="(min-width: 768px) 50vw, 100vw"
               className="why-image h-full w-full rounded-lg object-cover shadow-lg"
             />
           </div>
@@ -252,29 +259,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer className="mt-10 w-full border-t border-orange-300/40 bg-gradient-to-r from-rose-500 to-orange-500 py-6 text-orange-50">
-        <div className="mx-auto flex w-full max-w-7xl flex-col items-center justify-between px-4 text-center sm:px-6 md:flex-row md:text-left">
-          <span className="text-sm sm:text-base">© 2025 Nexova. All rights reserved.</span>
-          <div className="mt-4 flex space-x-6 text-amber-100 md:mt-0">
-            <a
-              href="https://linkedin.com/company/nexova"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-white"
-            >
-              LinkedIn
-            </a>
-            <a
-              href="https://instagram.com/nexova"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-white"
-            >
-              Instagram
-            </a>
-          </div>
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   );
 }
