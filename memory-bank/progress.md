@@ -1,5 +1,140 @@
 # Progress
 
+# Backend serialization audit + refactor (2026-10-14)
+
+Scope changed:
+1. `docs/serialization-audit.md` (new) — full endpoint audit and target contract.
+2. `backrooms/services/Supply_directory_API/models.py` — new/changed schemas.
+3. `backrooms/services/Supply_directory_API/routes/{suppliers,users,auth,profiles}.py`,
+   `main.py` — response_model wiring and slim projections.
+4. `backrooms/services/Inventory-API/schemas.py`, `main.py` — `HealthResponse` + typed root.
+5. `backrooms/services/APIs/analyzer-api.py` — `IncidentAnalysisResponse` + documented export.
+6. `backrooms/services/pyproject.toml` — added `APIs/tests` to pytest `testpaths`.
+7. Tests: `Supply_directory_API/tests/test_serialization.py` (new, 11),
+   `APIs/tests/test_analyzer_serialization.py` (new, 5);
+   updated `test_register.py` (2), `test_users.py` (1), `Inventory-API/tests/test_inventory.py` (1).
+8. `uis/backoffice/lib/auth/types.ts`, `uis/backoffice/app/suppliers/page.tsx` — type sync.
+
+What changed (all 28 endpoints; branch `backend-serialization-audit`):
+1. Every endpoint now declares an explicit `response_model`. The two `GET /` probes return
+   typed `HealthResponse`; the two `DELETE` routes return `MessageResponse`; the analyzer
+   `analyze` route returns `IncidentAnalysisResponse`.
+2. `POST /suppliers` now takes a dedicated input schema `SupplierCreate` (no client-supplied
+   `updated_at`); `Supplier` was split into `SupplierBase` + `SupplierCreate`/`Supplier`, with
+   `SupplierRecord`/`SupplierListItem` projections.
+3. List endpoints slimmed to consumer fields: `GET /suppliers` → `SupplierListItem` (drops
+   `notes`, `updated_at`); `GET /users` → `UserListItem{id,role,is_active}` (drops email/uuid).
+4. Sensitive/internal field removal: `POST /users` returns `UserRegistrationResponse{id}`
+   (no email/uuid/password); `GET /auth/me` returns `CurrentUserWithProfile`
+   (`id,email,role,profile` only); `GET/PUT /users/{id}` return `UserDetail` (no uuid);
+   `ProfileResponse` drops the internal `user_id` FK. `email` remains on `GET /auth/me` only.
+5. Analyzer response drops internal `score_counts`; the CSV export is documented as a
+   `response_model` exception with `response_class`/`responses` metadata.
+6. Inventory-API was already correctly serialized (dedicated create/read schemas + flat
+   `OrderRead`); only its root probe needed a model. `user_uuid` stays on order responses
+   because the orders UI renders it (documented decision).
+
+Validation performed:
+1. `uv run pytest` from `backrooms/services` passed 140/140 (was 124; +16 new/updated across
+   the serializer contract suites and the analyzer suite). Py-compile and import smoke passed
+   for all three apps.
+2. Response schemas confirmed against generated OpenAPI for all three apps (list endpoints
+   return arrays of the slim item schemas; `/` → `HealthResponse`; export → `text/csv`).
+3. `npm run lint` and `npm run build` in `uis/backoffice` passed; all 16 routes generated.
+4. No protected path modified (`.env`, `CONTEXT.md`, `infra/**` untouched). Tests run against
+   isolated temp TinyDB and in-memory SQLite.
+
+Remaining risks / notes:
+1. `GET /users` and `GET /users/{id}` have no current UI consumer; their schemas are shaped for
+   admin use and tests. Revisit if an admin screen is added.
+2. `POST /users` no longer echoes `email`; this is an intentional API-contract change per the
+   audit. The backoffice `register()` already discarded the body and logs in next, so no
+   frontend change was needed.
+3. The analyzer `results/export` route intentionally has no `response_model` (CSV stream);
+   documented in the audit and covered by a test.
+4. Inventory order responses still expose `user_uuid`/`asset_id`; kept because the orders UI
+   displays the UUID and the flat projection is deliberate. Confirm before removing.
+
+# Frontend performance refactor — website + backoffice (2026-10-13)
+
+Scope changed:
+1. `uis/website/app/page.tsx`, `app/application/page.tsx`, `app/globals.css`.
+2. `uis/website/components/SiteHeader.tsx` (new), `components/SiteFooter.tsx` (new); removed
+   `components/Header.tsx`.
+3. `uis/website/hooks/useApplicationForm.ts` (new), `lib/applicationValidation.ts` (new),
+   `lib/__tests__/applicationValidation.test.ts` (new).
+4. `uis/website/public/robots.txt`, `public/sitemap.xml` (new).
+5. `uis/backoffice/components/auth/AuthGuard.tsx`, `app/globals.css`.
+6. `uis/backoffice/components/auth/AuthCard.tsx` (new), `hooks/useAuthSubmit.ts` (new).
+7. `uis/backoffice/lib/api/errors.ts` (new), `lib/api/__tests__/errors.test.ts` (new);
+   `lib/auth/session.ts`, `lib/inventory.ts`, `app/suppliers/page.tsx` now import the shared
+   helper.
+8. `uis/backoffice/app/{login,register,forgot-password,reset-password,account/change-password}/page.tsx`.
+9. `jest.config.js` (added `uis/website` to `roots`), `uis/backoffice/lib/__tests__/inventory.test.ts`
+   (import moved to the shared module).
+10. `memory-bank/techContext.md`, `memory-bank/progress.md`.
+
+What changed (performance, audit §4):
+1. Website hero (audit §4.3): replaced the inline `background-image` of the 2.7 MB `bphoto1.png`
+   with `next/image` (`fill`, `preload`, `fetchPriority="high"`, `sizes="100vw"`,
+   `object-cover`). Next 16 deprecates `priority` in favour of `preload`, verified in
+   `node_modules/next/dist/docs`. The `.hero-motion` keyframes were repointed from
+   `background-position` to `object-position` so the pan animation is preserved; reduced-motion
+   still disables it.
+2. Service/why images (audit §4.4): added per-breakpoint `sizes` so mobile no longer requests
+   `w=1920` for a 339 px slot.
+3. Backoffice render gating (audit §4.2): `AuthGuard` no longer replaces the route with a
+   full-screen "Checking session..." placeholder. It renders `children` immediately (so the LCP
+   text paints pre-hydration) and keeps the redirect plus a non-blocking status pill.
+4. Contrast (audit §4.6): website white-on-`rose-500` CTAs/modal buttons moved to `rose-600`
+   (~4.70:1, AA); backoffice `.nav-icon` `#6f8889` → `#7f9a9b` (~5.2:1 on `#14262e`, AA at 10 px).
+5. SEO (audit §4.8): added `public/robots.txt` (with sitemap reference) and `public/sitemap.xml`.
+
+What changed (refactors, audit §5 — all five):
+1. §5.1 `parseApiError` de-duplicated into `lib/api/errors.ts`; the three copies (auth session,
+   inventory lib, suppliers page) now import it. Existing test coverage moved with the module.
+2. §5.2 `SiteFooter` extracted from the two website pages.
+3. §5.3 `SiteHeader` extracted with a `linkMode: "anchor" | "route"` prop replacing both the
+   anchor-only `Header.tsx` and the route-prefixed inline header on the application page.
+4. §5.4 `AuthCard` (+ `AuthAlert`, shared `AUTH_INPUT_CLASS`/`AUTH_SUBMIT_CLASS`) and
+   `useAuthSubmit` extracted across the five backoffice auth pages, preserving per-page copy,
+   field errors, redirects, and the forgot-password "generic error only" behaviour.
+5. §5.5 `useApplicationForm` hook extracted over the pure `validateField`/`validateAll` module;
+   the application page is now mostly JSX.
+
+Out of scope (dev-build artefacts, per audit §4.1/§4.5/§4.7): the unminified dev bundle,
+`webpack.js`, source maps, and render-blocking CSS. Per the developer's instruction the served
+build stays on `next dev`, so these cannot be addressed and are documented rather than "fixed".
+
+Validation performed:
+1. `npx jest` from the repo root passed 37/37 across 6 suites (existing 28 + 9 new across the
+   shared `parseApiError` and website validation modules).
+2. `npm run lint` and `npm run build` passed in `uis/website` (routes `/` and `/application`) and
+   `uis/backoffice` (all 14 routes generated).
+3. Two pre-existing validation quirks were confirmed and preserved (not fixed) while writing
+   tests: the phone regex rejects space-separated digit groups, and an empty `experience` field
+   passes because `Number("") === 0`.
+4. No live browser/API run was performed (dev servers were not running in this session); the
+   changes were validated via typecheck, lint, build, and unit tests only.
+
+Remaining risks / notes:
+1. The `performance-audit/before/*` numbers are from `next dev`; the post-refactor Lighthouse
+   run also used the dev build, so the comparison is like-for-like. `performance-audit/after/REPORT.md`
+   now records the results: Performance rose website 72→83 / 53→66 and backoffice 60→80 / 46→69
+   (desktop/mobile), website Accessibility 96→100 and SEO 92→100. Backoffice Accessibility stayed
+   95: the cited `.nav-icon` failure was fixed (5 nodes removed) but ~50 other sub-AA dashboard
+   tokens remain. Website bytes fell 6,369 → ~3,600 KiB via the hero `next/image`; backoffice LCP
+   fell 3.6→0.6 s / 20.1→2.7 s at unchanged bytes via the removed render gate. Dev-bundle TBT/TTI
+   are unchanged and remain the reason scores stay below 90.
+2. `AuthGuard` now renders protected route content optimistically (one tick before the token
+   check resolves). The backoffice overview data is non-sensitive sample data, matching the
+   audit's recommended trade-off; if protected data becomes sensitive, revisit this.
+3. `memory-bank/projectbrief.md` remains stale (still describes `uis/landing_page` +
+   `uis/talent-pipeline-tracker`); `techContext.md` was updated to reflect the current
+   website/backoffice stack.
+4. The website source images (`bphoto1.png`, `bphoto5.jpg`) remain large on disk; only the
+   delivered bytes are optimised by `next/image`.
+
 # Monorepo Docker containerization for development (2026-10-09)
 
 Scope changed:

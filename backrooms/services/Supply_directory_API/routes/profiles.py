@@ -15,7 +15,12 @@ router = APIRouter(prefix="/profiles", tags=["profiles"])
 
 def _profile_response(profile_entry) -> ProfileResponse:
 	profile_id, profile = profile_entry
-	return ProfileResponse(id=profile_id, **profile.model_dump())
+	return ProfileResponse(
+		id=profile_id,
+		name=profile.name,
+		phone=profile.phone,
+		address=profile.address,
+	)
 
 
 @router.get("/me", response_model=ProfileResponse)

@@ -5,6 +5,9 @@ business decisions (computed stock, rejection before write, recorded user UUID)
 rather than transport details alone.
 """
 
+from services.Supply_directory_API.auth.services import get_user_entry_by_email
+from services.Supply_directory_API.database import get_db
+
 
 def _inbound(client, headers, asset_id, quantity, office="Valencia"):
 	return client.post(
@@ -41,14 +44,16 @@ def test_new_asset_starts_at_zero_stock(inventory_client, auth_headers, make_ass
 
 
 def test_inbound_increases_stock_and_records_authenticated_uuid(
-	inventory_client, auth_headers, make_asset, client
+	inventory_client, auth_headers, registered_user, make_asset
 ):
 	asset = make_asset()
 	response = _inbound(inventory_client, auth_headers, asset["id"], 10)
 	assert response.status_code == 201
 
-	expected_uuid = client.get("/auth/me", headers=auth_headers).json()["uuid"]
-	assert response.json()["user_uuid"] == expected_uuid
+	# ``uuid`` is internal (never returned by the API), so read it from storage.
+	with get_db() as db:
+		_, user = get_user_entry_by_email(db, registered_user["email"])
+	assert response.json()["user_uuid"] == user.uuid
 
 	listed = inventory_client.get("/inventory/products").json()
 	stock = {item["id"]: item["current_stock"] for item in listed}[asset["id"]]

@@ -43,7 +43,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["Supply_directory_API/tests", "Inventory-API/tests"]
+testpaths = ["Supply_directory_API/tests", "Inventory-API/tests", "APIs/tests"]
 
 [tool.coverage.run]
 source = [

@@ -28,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_inventory_schema
 from routers.inventory import router as inventory_router
+from schemas import HealthResponse
 
 
 @asynccontextmanager
@@ -58,6 +59,6 @@ app.add_middleware(
 app.include_router(inventory_router)
 
 
-@app.get("/")
-def root() -> dict[str, str]:
-	return {"status": "ok", "service": "inventory"}
+@app.get("/", response_model=HealthResponse)
+def root() -> HealthResponse:
+	return HealthResponse(status="ok", service="inventory")

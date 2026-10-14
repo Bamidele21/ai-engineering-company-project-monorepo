@@ -21,10 +21,15 @@ def _register(client, email, password="some-password-123"):
 
 
 def test_list_users_returns_registered_users(client, registered_user, auth_headers):
+    user_id = _me_id(client, auth_headers)
     response = client.get("/users", headers=auth_headers)
     assert response.status_code == 200
-    emails = [user["email"] for user in response.json()]
-    assert registered_user["email"] in emails
+
+    body = response.json()
+    assert user_id in [item["id"] for item in body]
+    # The list projection is slim: no email and no internal uuid leak.
+    for item in body:
+        assert set(item) == {"id", "role", "is_active"}
 
 
 def test_list_users_requires_authentication(client):

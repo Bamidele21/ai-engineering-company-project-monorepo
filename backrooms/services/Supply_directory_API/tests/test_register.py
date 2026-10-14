@@ -5,7 +5,10 @@ password, default the role, and create a linked profile — all verified here as
 business outcomes rather than response serialisation.
 """
 
-from services.Supply_directory_API.auth.services import get_profile_by_user_id
+from services.Supply_directory_API.auth.services import (
+	get_profile_by_user_id,
+	get_user_by_id,
+)
 from services.Supply_directory_API.database import get_db, get_users_table
 
 
@@ -22,18 +25,26 @@ def test_register_creates_user_with_defaults(client):
     assert response.status_code == 201
 
     body = response.json()
-    assert body["email"] == "new@nexova.com"
-    assert body["role"] == "user"
-    assert body["is_active"] is True
-    # The hashed password must never leak back to the client.
+    # The registration response is a safe projection: only the new id.
+    assert set(body) == {"id"}
     assert "hashed_password" not in body
     assert "password" not in body
+    assert "email" not in body
+
+    # Defaults are applied in storage rather than echoed by the response.
+    with get_db() as db:
+        user = get_user_by_id(db, body["id"])
+    assert user.role == "user"
+    assert user.is_active is True
 
 
 def test_register_lowercases_email(client):
     response = _register(client, "MixedCase@Nexova.com")
     assert response.status_code == 201
-    assert response.json()["email"] == "mixedcase@nexova.com"
+
+    with get_db() as db:
+        user = get_user_by_id(db, response.json()["id"])
+    assert user.email == "mixedcase@nexova.com"
 
 
 def test_register_creates_linked_profile(client):

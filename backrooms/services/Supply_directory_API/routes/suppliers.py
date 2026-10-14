@@ -6,16 +6,20 @@ from pydantic import BaseModel, Field
 
 from services.Supply_directory_API.auth.dependencies import get_current_user
 from services.Supply_directory_API.database import get_db, get_suppliers_table
-from services.Supply_directory_API.models import AuthenticatedUser, Supplier, SupplierCountry, SupplierStatus
+from services.Supply_directory_API.models import (
+	AuthenticatedUser,
+	MessageResponse,
+	SupplierCountry,
+	SupplierCreate,
+	SupplierListItem,
+	SupplierRecord,
+	SupplierStatus,
+)
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
-
-
-class SupplierRecord(Supplier):
-	id: int
 
 
 class RateUpdatePayload(BaseModel):
@@ -26,9 +30,9 @@ class StatusUpdatePayload(BaseModel):
 	status: SupplierStatus
 
 
-def _as_storable(supplier: Supplier) -> dict:
+def _as_storable(supplier: SupplierCreate) -> dict:
 	data = supplier.model_dump()
-	data["updated_at"] = supplier.updated_at.isoformat()
+	data["updated_at"] = datetime.now(timezone.utc).isoformat()
 	return data
 
 
@@ -60,7 +64,7 @@ def _require_supplier_writer(current_user: AuthenticatedUser) -> None:
 
 @router.post("", response_model=SupplierRecord, status_code=201)
 def create_supplier(
-	payload: Supplier,
+	payload: SupplierCreate,
 	current_user: AuthenticatedUser = Depends(get_current_user),
 ):
 	_require_supplier_writer(current_user)
@@ -71,7 +75,7 @@ def create_supplier(
 		return _attach_id(created)
 
 
-@router.get("", response_model=list[SupplierRecord])
+@router.get("", response_model=list[SupplierListItem])
 def list_suppliers(
 	country: SupplierCountry | None = Query(default=None),
 	category: str | None = Query(default=None),
@@ -142,7 +146,7 @@ def update_supplier_status(
 	return _attach_id(updated)
 
 
-@router.delete("/{supplier_id}", status_code=200)
+@router.delete("/{supplier_id}", response_model=MessageResponse, status_code=200)
 def delete_supplier(
 	supplier_id: int,
 	current_user: AuthenticatedUser = Depends(get_current_user),
@@ -153,4 +157,4 @@ def delete_supplier(
 		_find_supplier_or_404(table, supplier_id)
 		table.remove(doc_ids=[supplier_id])
 
-	return {"detail": "Supplier deleted"}
+	return MessageResponse(detail="Supplier deleted")

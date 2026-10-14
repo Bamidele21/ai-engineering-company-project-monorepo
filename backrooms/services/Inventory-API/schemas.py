@@ -101,3 +101,8 @@ class OrderRead(BaseModel):
 
 class MessageResponse(BaseModel):
 	detail: str
+
+
+class HealthResponse(BaseModel):
+	status: str
+	service: str
