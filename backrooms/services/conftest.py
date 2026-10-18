@@ -43,6 +43,17 @@ from services.Supply_directory_API.database import get_db  # noqa: E402
 from services.Supply_directory_API.main import app  # noqa: E402
 from services.Supply_directory_API.models import UserUpdate  # noqa: E402
 from services.Supply_directory_API.routes import auth as auth_routes  # noqa: E402
+from services.Supply_directory_API.routes import suppliers as suppliers_routes  # noqa: E402
+
+
+@pytest.fixture()
+def clear_suppliers_cache():
+    """Drop the supplier list cache before each test.
+
+    The cache is a module-level singleton, so without this a cached list from a
+    previous test's temporary TinyDB could leak into the next test.
+    """
+    suppliers_routes._suppliers_cache.clear()
 
 
 @pytest.fixture()
@@ -57,7 +68,7 @@ def db(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def client(db):
+def client(db, clear_suppliers_cache):
     """A TestClient whose database writes land in an isolated temp TinyDB."""
     with TestClient(app) as test_client:
         yield test_client

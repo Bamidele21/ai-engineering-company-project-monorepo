@@ -6,12 +6,12 @@ import {
   it,
   jest,
 } from "@jest/globals";
+import { parseApiError } from "../api/errors";
 import {
   INVENTORY_API_URL,
   createInboundOrder,
   createOutboundOrder,
   listAssets,
-  parseApiError,
   stockLevel,
 } from "../inventory";
 

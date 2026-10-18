@@ -1,5 +1,113 @@
 # Progress
 
+# parseApiError de-duplication (2026-10-18)
+
+Scope changed:
+1. `uis/backoffice/lib/api/errors.ts` (new) — shared `parseApiError`.
+2. `uis/talent-pipeline-tracker/lib/api/errors.ts` (new) — shared `parseApiError`.
+3. Removed the local copies from `backoffice/lib/inventory.ts`, `backoffice/lib/suppliers.ts`,
+   `backoffice/lib/auth/session.ts`, and `talent-pipeline-tracker/lib/auth/session.ts`;
+   all now import the shared module.
+4. `backoffice/app/suppliers/page.tsx`, `backoffice/components/suppliers/SupplierRegistrationForm.tsx`
+   — import `parseApiError` from `@/lib/api/errors`.
+5. `backoffice/lib/__tests__/inventory.test.ts`, `talent-pipeline-tracker/__tests__/session.test.ts`
+   — updated imports to the shared module.
+
+What changed:
+1. Four identical `parseApiError` copies collapsed to one per app (3 → 1 in backoffice,
+   1 → 1 in tracker). No behaviour change.
+2. `talent-pipeline-tracker/lib/api/client.ts` `parseApiErrorBody` left untouched: it is a
+   distinct raw-body + status-fallback variant, not a duplicate of `parseApiError`.
+
+Validation performed:
+1. `npx jest` (repo root): 32 passed across 5 suites.
+2. `npm run lint` + `npm run build`: passed for `uis/backoffice` and
+   `uis/talent-pipeline-tracker` (all routes generated; no warnings).
+3. No protected path modified.
+
+Remaining risks / notes:
+1. `parseApiErrorBody` in the tracker `lib/api/client.ts` still overlaps conceptually with the
+   shared helper; merging would require reconciling the `trim()`/status-fallback behaviour.
+
+# Caching & optimisation implementation (2026-10-18)
+
+Implemented the recommendations from `CACHING_REPORT.md` §5.
+
+Scope changed:
+1. `backrooms/services/cache.py` (new) — thread-safe `TtlCache` (get/set/invalidate/clear).
+2. `backrooms/services/Supply_directory_API/routes/suppliers.py` — cached `GET /suppliers`
+   (key includes country/category, TTL 30s); invalidated on create/rate/status/delete.
+3. `backrooms/services/Inventory-API/routers/inventory.py` — cached `GET /inventory/products`
+   (TTL 15s); invalidated on product/inbound/outbound writes.
+4. `backrooms/services/conftest.py`, `Inventory-API/tests/conftest.py` — per-test cache-clear
+   fixtures wired into `client`/`inventory_client` (prevents cross-test cache leaks).
+5. `backrooms/services/Supply_directory_API/tests/test_cache.py` (new) — `TtlCache`
+   happy/edge/failure + supplier list invalidation test.
+6. `backrooms/services/Inventory-API/tests/test_inventory.py` — added order-write
+   invalidates-products-cache test.
+7. `uis/backoffice/lib/suppliers.ts` (new) — shared supplier types/constants +
+   `parseApiError` + `isRenewalWithin60Days`.
+8. `uis/backoffice/components/incidents/IncidentReadout.tsx` (new) and
+   `components/suppliers/SupplierRegistrationForm.tsx` (new) — extracted for lazy loading.
+9. `uis/backoffice/app/incidents/page.tsx`, `app/suppliers/page.tsx` — `next/dynamic` imports;
+   `suppliers` also gained the `renewalSoonById` useMemo and module-level `moneyFormatter`.
+10. `uis/website/app/application/page.tsx`, `uis/talent-pipeline-tracker/app/candidates/[id]/page.tsx`
+    — removed trivial `useMemo`s.
+11. `uis/backoffice/lib/__tests__/suppliers.test.ts` (new) — `isRenewalWithin60Days`
+    happy/edge/failure.
+12. `CACHING_REPORT.md` — added "Implementation status" section.
+
+What changed:
+1. `GET /suppliers` and `GET /inventory/products` now serve from an in-memory TTL cache and
+   are invalidated on every write route that mutates their underlying data.
+2. Two heavy/conditional backoffice sections are code-split via `next/dynamic` with loading
+   fallbacks; the supplier renewal-date computation is memoised on `[suppliers]`; three
+   trivial memoisations removed.
+
+Validation performed:
+1. `uv run pytest` (backrooms/services): 148 passed (was 140; +8 cache/invalidation tests).
+2. `npx jest` (repo root): 32 passed across 5 suites (+4 suppliers tests).
+3. `npm run lint` + `npm run build` passed for `uis/backoffice`, `uis/website`, and
+   `uis/talent-pipeline-tracker` (all routes generated).
+4. No protected path modified (`.env`, `CONTEXT.md`, `infra/**`, `data/raw/**`, lockfiles
+   untouched).
+
+Remaining risks / notes:
+1. Cache is process-local (single-worker dev model); multi-worker/Redis requires replacing
+   `backrooms/services/cache.py` with a shared store.
+2. RESOLVED — `parseApiError` was unified into `lib/api/errors.ts` per app (see the
+   de-duplication entry above); only the tracker's distinct `parseApiErrorBody` variant remains.
+
+# Caching & optimisation audit (2026-10-18)
+
+Scope audited: `uis/` and `backrooms/services/` against `caching-optimization-context.md`.
+
+What changed:
+1. `CACHING_REPORT.md` (new, repo root) — evidence-based audit with the four required
+   sections (frontend decisions, backend decisions, tradeoffs, what was not cached).
+
+Findings (audit-only, no code changed):
+1. Backend: no caching exists today. Recommended targets — `GET /suppliers` (TinyDB
+   read-all + filter, TTL 30s) and `GET /inventory/products` (3 queries incl. grouped
+   aggregates, TTL 15s), both invalidated on their write routes. Personalised/request-scoped
+   endpoints (`login`, `me`, `profiles/me`, `users/{id}`) explicitly excluded.
+2. Frontend: no `next/dynamic`/`React.lazy` anywhere. Recommended lazy-load targets —
+   backoffice incident readout (`incidents/page.tsx:96-158`) and supplier registration form
+   (`suppliers/page.tsx:558-716`). Real `useMemo` target — supplier renewal-date computation
+   (`suppliers/page.tsx:116-135,477`) keyed on `[suppliers]`; three existing memoisations are
+   trivial and flagged for removal.
+
+Validation performed:
+1. Exemption declared: documentation/markdown only, no functional behaviour
+   (`.agents/rules/test-coverage.md` exception #1), so no tests are required.
+2. No protected path modified (`.env`, `CONTEXT.md`, `infra/**`, `data/raw/**` untouched).
+
+Remaining risks / notes:
+1. Report is a plan, not an implementation; §5 lists the six next actions (cache module +
+   invalidation wiring, two lazy-loads, one useMemo + trivial-memo cleanup, tests).
+2. TTLs (30s/15s) and the single-worker in-memory cache assumption depend on the dev
+   deployment model; revisit for multi-worker/Redis before production.
+
 # Backend serialization audit + refactor (2026-10-14)
 
 Scope changed:

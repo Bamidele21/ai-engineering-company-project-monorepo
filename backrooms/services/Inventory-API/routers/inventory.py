@@ -6,6 +6,7 @@ from sqlmodel import Session, func, select
 
 from services.Supply_directory_API.auth.dependencies import get_current_user
 from services.Supply_directory_API.models import AuthenticatedUser
+from services.cache import TtlCache
 
 from database import get_sql_session
 from models import Asset, AssetEntry, AssetExit
@@ -21,6 +22,14 @@ from schemas import (
 
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+
+# Stock is an operational signal, so the products read uses a shorter TTL than
+# the supplier directory. Every order/product write invalidates immediately,
+# and the outbound route recomputes stock from the DB inside the request, so a
+# stale cache can never authorise an over-allocation.
+PRODUCTS_CACHE_TTL = 15.0
+PRODUCTS_CACHE_KEY = "inventory:products"
+_inventory_cache = TtlCache()
 
 
 def _sum_by_asset(session: Session, model) -> dict[int, int]:
@@ -62,9 +71,15 @@ def _to_asset_read(asset: Asset, current_stock: int) -> AssetRead:
 
 @router.get("/products", response_model=list[AssetRead])
 def list_products(session: Session = Depends(get_sql_session)) -> list[AssetRead]:
+	cached = _inventory_cache.get(PRODUCTS_CACHE_KEY)
+	if cached is not None:
+		return cached
+
 	assets = session.exec(select(Asset).order_by(Asset.id)).all()
 	stock = _stock_map(session)
-	return [_to_asset_read(asset, stock.get(asset.id, 0)) for asset in assets]
+	products = [_to_asset_read(asset, stock.get(asset.id, 0)) for asset in assets]
+	_inventory_cache.set(PRODUCTS_CACHE_KEY, products, PRODUCTS_CACHE_TTL)
+	return products
 
 
 @router.post("/products", response_model=AssetRead, status_code=201)
@@ -84,6 +99,7 @@ def create_product(
 			detail=f"An asset with SKU '{payload.sku}' already exists.",
 		)
 	session.refresh(asset)
+	_inventory_cache.invalidate("inventory:")
 	# A freshly created asset always starts at zero stock.
 	return _to_asset_read(asset, 0)
 
@@ -108,6 +124,7 @@ def create_inbound_order(
 	session.add(entry)
 	session.commit()
 	session.refresh(entry)
+	_inventory_cache.invalidate("inventory:")
 	return AssetEntryRead(**entry.model_dump())
 
 
@@ -133,6 +150,7 @@ def create_outbound_order(
 	session.add(exit_record)
 	session.commit()
 	session.refresh(exit_record)
+	_inventory_cache.invalidate("inventory:")
 	return AssetExitRead(**exit_record.model_dump())
 
 

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from services.Supply_directory_API.auth.dependencies import get_current_user
 from services.Supply_directory_API.database import get_db, get_suppliers_table
+from services.cache import TtlCache
 from services.Supply_directory_API.models import (
 	AuthenticatedUser,
 	MessageResponse,
@@ -20,6 +21,16 @@ from services.Supply_directory_API.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
+
+# Supplier contracts are low-churn (monthly/quarterly), so a 30s TTL is a safe
+# freshness tradeoff: writes invalidate immediately, and the stale window only
+# affects other users' cached reads.
+SUPPLIERS_CACHE_TTL = 30.0
+_suppliers_cache = TtlCache()
+
+
+def _suppliers_cache_key(country: SupplierCountry | None, category: str | None) -> str:
+    return f"suppliers:{country or ''}:{category or ''}"
 
 
 class RateUpdatePayload(BaseModel):
@@ -72,6 +83,7 @@ def create_supplier(
 		table = get_suppliers_table(db)
 		doc_id = table.insert(_as_storable(payload))
 		created = _get_after_write(table, doc_id)
+		_suppliers_cache.invalidate("suppliers:")
 		return _attach_id(created)
 
 
@@ -81,6 +93,11 @@ def list_suppliers(
 	category: str | None = Query(default=None),
 	current_user: AuthenticatedUser = Depends(get_current_user),
 ):
+	cache_key = _suppliers_cache_key(country, category)
+	cached = _suppliers_cache.get(cache_key)
+	if cached is not None:
+		return cached
+
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		docs = table.all()
@@ -93,6 +110,7 @@ def list_suppliers(
 		if matches_country and matches_category:
 			results.append(_attach_id(doc))
 
+	_suppliers_cache.set(cache_key, results, SUPPLIERS_CACHE_TTL)
 	return results
 
 
@@ -126,6 +144,7 @@ def update_supplier_rate(
 			doc_ids=[supplier_id],
 		)
 		updated = _get_after_write(table, supplier_id)
+		_suppliers_cache.invalidate("suppliers:")
 
 	return _attach_id(updated)
 
@@ -142,6 +161,7 @@ def update_supplier_status(
 		_find_supplier_or_404(table, supplier_id)
 		table.update({"status": payload.status}, doc_ids=[supplier_id])
 		updated = _get_after_write(table, supplier_id)
+		_suppliers_cache.invalidate("suppliers:")
 
 	return _attach_id(updated)
 
@@ -156,5 +176,6 @@ def delete_supplier(
 		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
 		table.remove(doc_ids=[supplier_id])
+		_suppliers_cache.invalidate("suppliers:")
 
 	return MessageResponse(detail="Supplier deleted")

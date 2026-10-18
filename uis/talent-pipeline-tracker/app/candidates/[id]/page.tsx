@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getRecordById, patchRecord } from "@/lib/api/candidates";
 import { addNote, deleteNote, getNotes } from "@/lib/api/notes";
@@ -116,13 +116,7 @@ export default function CandidateDetailPage() {
     void loadNotes();
   }, [loadCandidate, loadNotes]);
 
-  const candidateName = useMemo(() => {
-    if (!candidate) {
-      return "Candidate";
-    }
-
-    return candidate.full_name || "Candidate";
-  }, [candidate]);
+  const candidateName = candidate ? candidate.full_name || "Candidate" : "Candidate";
 
   const handleSaveStatusAndStage = async () => {
     if (!candidateId) {

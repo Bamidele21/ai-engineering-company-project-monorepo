@@ -32,6 +32,17 @@ from sqlmodel import SQLModel, create_engine  # noqa: E402
 import database  # noqa: E402
 import models  # noqa: E402,F401  (register tables)
 import main as inventory_main  # noqa: E402
+from routers import inventory as inventory_routes  # noqa: E402
+
+
+@pytest.fixture()
+def clear_inventory_cache():
+    """Drop the inventory products cache before each test.
+
+    The cache is a module-level singleton, so a cached product list from a
+    previous test's in-memory SQLite engine could leak into the next test.
+    """
+    inventory_routes._inventory_cache.clear()
 
 
 @pytest.fixture()
@@ -57,11 +68,11 @@ def sqlite_engine():
 
 
 @pytest.fixture()
-def inventory_client(sqlite_engine, monkeypatch):
-	"""A TestClient for the Inventory app bound to the isolated SQLite engine."""
-	monkeypatch.setattr(database, "engine", sqlite_engine)
-	with TestClient(inventory_main.app) as client:
-		yield client
+def inventory_client(sqlite_engine, monkeypatch, clear_inventory_cache):
+    """A TestClient for the Inventory app bound to the isolated SQLite engine."""
+    monkeypatch.setattr(database, "engine", sqlite_engine)
+    with TestClient(inventory_main.app) as client:
+        yield client
 
 
 @pytest.fixture()

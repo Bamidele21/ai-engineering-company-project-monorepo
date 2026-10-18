@@ -214,3 +214,20 @@ def test_orders_list_includes_asset_data(inventory_client, auth_headers, make_as
 		assert order["asset_name"] == "USB-C Hub"
 		assert order["asset_sku"] == asset["sku"]
 		assert order["user_uuid"]
+
+
+def test_order_write_invalidates_products_cache(inventory_client, auth_headers, make_asset):
+	asset = make_asset()
+	_inbound(inventory_client, auth_headers, asset["id"], 10)
+
+	# Populate the products cache with the current stock.
+	first_list = inventory_client.get("/inventory/products").json()
+	by_id = {item["id"]: item["current_stock"] for item in first_list}
+	assert by_id[asset["id"]] == 10
+
+	# A second inbound must be reflected on the next read (cache invalidated).
+	_inbound(inventory_client, auth_headers, asset["id"], 5)
+
+	second_list = inventory_client.get("/inventory/products").json()
+	relisted_by_id = {item["id"]: item["current_stock"] for item in second_list}
+	assert relisted_by_id[asset["id"]] == 15

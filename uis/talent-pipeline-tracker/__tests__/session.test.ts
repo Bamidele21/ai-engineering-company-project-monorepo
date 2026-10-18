@@ -1,4 +1,4 @@
-import { parseApiError } from "../lib/auth/session";
+import { parseApiError } from "../lib/api/errors";
 
 describe("parseApiError", () => {
   it("returns the string detail from a payload", () => {
