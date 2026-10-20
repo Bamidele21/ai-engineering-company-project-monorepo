@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
@@ -21,13 +22,12 @@ SupplierStatus = Literal["active", "suspended"]
 UserRole = Literal["admin", "manager", "user"]
 
 
-class Supplier(BaseModel):
+class SupplierBase(BaseModel):
 	name: str
 	country: SupplierCountry
 	categories: list[SupplierCategory] = Field(min_length=1)
 	monthly_rate: float = Field(gt=0)
 	currency: SupplierCurrency
-	updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 	status: SupplierStatus
 	contract_renewal_date: str | None = Field(
 		default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"
@@ -36,7 +36,7 @@ class Supplier(BaseModel):
 	notes: str | None = None
 
 	@model_validator(mode="after")
-	def validate_currency_matches_country(self) -> "Supplier":
+	def validate_currency_matches_country(self) -> "SupplierBase":
 		expected_currency = "EUR" if self.country == "Spain" else "USD"
 		if self.currency != expected_currency:
 			raise ValueError(
@@ -45,11 +45,47 @@ class Supplier(BaseModel):
 		return self
 
 
+class SupplierCreate(SupplierBase):
+	"""Write schema for ``POST /suppliers``.
+
+	``updated_at`` is system-generated and therefore not accepted from clients.
+	"""
+
+
+class Supplier(SupplierBase):
+	updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SupplierRecord(Supplier):
+	"""Full supplier projection for detail and write responses."""
+
+	id: int
+
+
+class SupplierListItem(BaseModel):
+	"""Slim supplier projection for ``GET /suppliers``.
+
+	Omits ``notes`` and ``updated_at`` because the directory table never renders
+	them.
+	"""
+
+	id: int
+	name: str
+	country: SupplierCountry
+	categories: list[SupplierCategory]
+	monthly_rate: float
+	currency: SupplierCurrency
+	status: SupplierStatus
+	contract_renewal_date: str | None = None
+	contact_email: EmailStr | None = None
+
+
 class User(BaseModel):
 	email: EmailStr
 	hashed_password: str
 	is_active: bool = True
 	role: UserRole = "user"
+	uuid: str = Field(default_factory=lambda: str(uuid4()))
 	created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -68,11 +104,31 @@ class UserUpdate(BaseModel):
 	is_active: bool | None = None
 
 
-class UserResponse(BaseModel):
+class UserRegistrationResponse(BaseModel):
+	"""Response for ``POST /users``.
+
+	Returns only the new identifier: register must not echo the email, and the
+	client immediately calls ``POST /auth/login`` to obtain a token.
+	"""
+
+	id: int
+
+
+class UserListItem(BaseModel):
+	"""Slim user projection for ``GET /users`` (no email or internal UUID)."""
+
+	id: int
+	role: UserRole
+	is_active: bool
+
+
+class UserDetail(BaseModel):
+	"""Admin/owner user projection for ``GET``/``PUT /users/{id}``."""
+
 	id: int
 	email: EmailStr
-	is_active: bool
 	role: UserRole
+	is_active: bool
 	created_at: datetime
 
 
@@ -93,11 +149,21 @@ class ProfileUpdate(BaseModel):
 	address: str | None = None
 
 
-class ProfileResponse(Profile):
+class ProfileResponse(BaseModel):
+	"""Profile projection. The owning ``user_id`` FK stays internal."""
+
 	id: int
+	name: str = ""
+	phone: str | None = None
+	address: str | None = None
 
 
-class UserWithProfile(UserResponse):
+class CurrentUserWithProfile(BaseModel):
+	"""``GET /auth/me`` projection. Returns the caller's own email only."""
+
+	id: int
+	email: EmailStr
+	role: UserRole
 	profile: ProfileResponse
 
 
@@ -128,6 +194,11 @@ class ChangePasswordRequest(BaseModel):
 
 class MessageResponse(BaseModel):
 	detail: str
+
+
+class HealthResponse(BaseModel):
+	status: str
+	service: str
 
 
 class PasswordResetToken(BaseModel):

@@ -17,9 +17,10 @@ Every commit must follow these explicit ordered steps:
 1. Re-read `CONTEXT.md` plus any scoped context file for the area being modified (for example `scripts/context.md` or `uis/**/context.md`).
 2. Re-check impacted requirements in the relevant README or milestone checklist for that folder.
 3. Run targeted validation for changed scope (lint/build/tests where available) and capture the result.
-4. Update `memory-bank/progress.md` with what changed, what was validated, and remaining risks.
-5. Confirm no protected path (section 3) was modified without explicit developer approval.
-6. Only then stage and commit.
+4. For every functional code change, add or update tests covering the happy case, edge case, and failure case, then run them and capture the result (see `.agents/rules/test-coverage.md`).
+5. Update `memory-bank/progress.md` with what changed, what was validated, and remaining risks.
+6. Confirm no protected path (section 3) was modified without explicit developer approval.
+7. Only then stage and commit.
 
 ## 3) Protected paths requiring explicit developer confirmation
 
@@ -43,4 +44,5 @@ Agents must not modify these files/folders without explicit developer confirmati
 
 At session start, agents must also read:
 1. `.agents/rules/context-and-change-control.md`
-2. `.agents/skills/nexova-milestone-audit/SKILL.md`
+2. `.agents/rules/test-coverage.md`
+3. `.agents/skills/nexova-milestone-audit/SKILL.md`

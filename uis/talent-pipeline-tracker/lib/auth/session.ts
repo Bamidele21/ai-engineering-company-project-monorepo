@@ -1,3 +1,4 @@
+import { parseApiError } from "../api/errors";
 import { AUTH_API_URL, authorizedFetch } from "./client";
 import { clearToken, setToken } from "./storage";
 import type {
@@ -10,33 +11,6 @@ import type {
   TokenResponse,
   UserWithProfile,
 } from "./types";
-
-interface ApiErrorPayload {
-  detail?: string | Array<{ msg?: string }>;
-}
-
-function parseApiError(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== "object") {
-    return fallback;
-  }
-
-  const errorPayload = payload as ApiErrorPayload;
-  if (typeof errorPayload.detail === "string") {
-    return errorPayload.detail;
-  }
-
-  if (Array.isArray(errorPayload.detail)) {
-    const messages = errorPayload.detail
-      .map((entry) => entry.msg)
-      .filter((entry): entry is string => Boolean(entry));
-
-    if (messages.length > 0) {
-      return messages.join(". ");
-    }
-  }
-
-  return fallback;
-}
 
 async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null);

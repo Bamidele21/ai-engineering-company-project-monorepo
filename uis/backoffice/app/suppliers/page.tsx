@@ -1,138 +1,35 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { BackofficeShell } from "@/components/backoffice/BackofficeShell";
 import { authorizedFetch } from "@/lib/auth/client";
+import { parseApiError } from "@/lib/api/errors";
+import {
+  CATEGORY_OPTIONS,
+  SUPPLIERS_API_URL,
+  isRenewalWithin60Days,
+  type SupplierCategory,
+  type SupplierCountry,
+  type SupplierRecord,
+} from "@/lib/suppliers";
 
-type SupplierCountry = "Spain" | "USA";
-type SupplierStatus = "active" | "suspended";
-type SupplierCategory =
-  | "job_boards"
-  | "ats_software"
-  | "assessment_tools"
-  | "training_platforms"
-  | "payroll_and_hr_software"
-  | "video_interview"
-  | "background_check"
-  | "office_and_facilities"
-  | "it_and_software_licenses";
-
-type SupplierRecord = {
-  id: number;
-  name: string;
-  country: SupplierCountry;
-  categories: SupplierCategory[];
-  monthly_rate: number;
-  currency: "EUR" | "USD";
-  updated_at: string;
-  status: SupplierStatus;
-  contract_renewal_date: string | null;
-  contact_email: string | null;
-  notes: string | null;
-};
-
-type SupplierCreatePayload = {
-  name: string;
-  country: SupplierCountry;
-  categories: SupplierCategory[];
-  monthly_rate: number;
-  currency: "EUR" | "USD";
-  status: SupplierStatus;
-  contract_renewal_date?: string;
-  contact_email?: string;
-  notes?: string;
-};
-
-type ApiError = {
-  detail?: string | Array<{ msg?: string }>;
-};
-
-const SUPPLIERS_API_URL =
-  process.env.NEXT_PUBLIC_SUPPLIERS_API_URL ?? "http://localhost:8000";
-
-const CATEGORY_OPTIONS: Array<{ value: SupplierCategory; label: string }> = [
-  { value: "job_boards", label: "Job boards" },
-  { value: "ats_software", label: "ATS software" },
-  { value: "assessment_tools", label: "Assessment tools" },
-  { value: "training_platforms", label: "Training platforms" },
+const SupplierRegistrationForm = dynamic(
+  () => import("@/components/suppliers/SupplierRegistrationForm"),
   {
-    value: "payroll_and_hr_software",
-    label: "Payroll and HR software",
-  },
-  { value: "video_interview", label: "Video interview" },
-  { value: "background_check", label: "Background check" },
-  { value: "office_and_facilities", label: "Office and facilities" },
-  {
-    value: "it_and_software_licenses",
-    label: "IT and software licenses",
-  },
-];
-
-type NewSupplierForm = {
-  name: string;
-  country: SupplierCountry;
-  categories: SupplierCategory[];
-  monthly_rate: string;
-  status: SupplierStatus;
-  contract_renewal_date: string;
-  contact_email: string;
-  notes: string;
-};
-
-const INITIAL_FORM: NewSupplierForm = {
-  name: "",
-  country: "Spain",
-  categories: [],
-  monthly_rate: "",
-  status: "active",
-  contract_renewal_date: "",
-  contact_email: "",
-  notes: "",
-};
-
-function parseApiError(errorPayload: unknown, fallback: string): string {
-  if (!errorPayload || typeof errorPayload !== "object") {
-    return fallback;
+    loading: () => (
+      <p className="supplier-success" role="status">
+        Loading the supplier registration form...
+      </p>
+    ),
   }
+);
 
-  const payload = errorPayload as ApiError;
-  if (typeof payload.detail === "string") {
-    return payload.detail;
-  }
-
-  if (Array.isArray(payload.detail)) {
-    const collected = payload.detail
-      .map((entry) => entry.msg)
-      .filter((entry): entry is string => Boolean(entry));
-    if (collected.length > 0) {
-      return collected.join(". ");
-    }
-  }
-
-  return fallback;
-}
-
-function isRenewalWithin60Days(value: string | null): boolean {
-  if (!value) {
-    return false;
-  }
-
-  const renewal = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(renewal.getTime())) {
-    return false;
-  }
-
-  const now = new Date();
-  const today = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  );
-  const diffDays = Math.ceil(
-    (renewal.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
-  );
-
-  return diffDays >= 0 && diffDays <= 60;
-}
+const moneyFormatter = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
 
 export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<SupplierRecord[]>([]);
@@ -141,22 +38,16 @@ export default function SuppliersPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
-  const [newSupplier, setNewSupplier] = useState<NewSupplierForm>(INITIAL_FORM);
-  const [formError, setFormError] = useState("");
-  const [formSuccess, setFormSuccess] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
   const [rateDrafts, setRateDrafts] = useState<Record<number, string>>({});
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
 
-  const moneyFormatter = useMemo(
-    () =>
-      new Intl.NumberFormat("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
-    []
-  );
+  const renewalSoonById = useMemo(() => {
+    const map: Record<number, boolean> = {};
+    for (const supplier of suppliers) {
+      map[supplier.id] = isRenewalWithin60Days(supplier.contract_renewal_date);
+    }
+    return map;
+  }, [suppliers]);
 
   const loadSuppliers = useCallback(async () => {
     setIsLoading(true);
@@ -207,85 +98,6 @@ export default function SuppliersPage() {
     void loadSuppliers();
   }, [loadSuppliers]);
 
-  const handleCategoryToggle = (category: SupplierCategory) => {
-    setNewSupplier((current) => {
-      const exists = current.categories.includes(category);
-      const nextCategories = exists
-        ? current.categories.filter((value) => value !== category)
-        : [...current.categories, category];
-
-      return { ...current, categories: nextCategories };
-    });
-  };
-
-  const handleCreateSupplier = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setFormError("");
-    setFormSuccess("");
-
-    if (!newSupplier.name.trim()) {
-      setFormError("Supplier name is required.");
-      return;
-    }
-
-    if (newSupplier.categories.length === 0) {
-      setFormError("Select at least one category.");
-      return;
-    }
-
-    const parsedRate = Number(newSupplier.monthly_rate);
-    if (!Number.isFinite(parsedRate) || parsedRate <= 0) {
-      setFormError("Monthly rate must be a number greater than zero.");
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    const payload: SupplierCreatePayload = {
-      name: newSupplier.name.trim(),
-      country: newSupplier.country,
-      categories: newSupplier.categories,
-      monthly_rate: parsedRate,
-      currency: newSupplier.country === "Spain" ? "EUR" : "USD",
-      status: newSupplier.status,
-      contract_renewal_date: newSupplier.contract_renewal_date || undefined,
-      contact_email: newSupplier.contact_email.trim() || undefined,
-      notes: newSupplier.notes.trim() || undefined,
-    };
-
-    try {
-      const response = await authorizedFetch(`${SUPPLIERS_API_URL}/suppliers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const responsePayload = (await response
-        .json()
-        .catch(() => null)) as unknown;
-
-      if (!response.ok) {
-        throw new Error(
-          parseApiError(
-            responsePayload,
-            "The API rejected the supplier registration request."
-          )
-        );
-      }
-
-      setFormSuccess("Supplier registered successfully.");
-      setNewSupplier(INITIAL_FORM);
-      await loadSuppliers();
-    } catch (error) {
-      setFormError(
-        error instanceof Error
-          ? error.message
-          : "The API rejected the supplier registration request."
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const updateRate = async (supplier: SupplierRecord) => {
     const rateValue = rateDrafts[supplier.id] ?? supplier.monthly_rate.toString();
     const parsedRate = Number(rateValue);
@@ -335,7 +147,7 @@ export default function SuppliersPage() {
   };
 
   const toggleStatus = async (supplier: SupplierRecord) => {
-    const nextStatus: SupplierStatus =
+    const nextStatus: SupplierRecord["status"] =
       supplier.status === "active" ? "suspended" : "active";
 
     setRowBusy((current) => ({ ...current, [supplier.id]: true }));
@@ -372,40 +184,14 @@ export default function SuppliersPage() {
   };
 
   return (
-    <main className="supplier-page">
-      <aside className="supplier-nav">
-        <Link className="supplier-brand" href="/">
-          <b>N</b>
-          <span>
-            <strong>Nexova</strong>
-            <small>Operations studio</small>
-          </span>
-        </Link>
-        <nav aria-label="Backoffice navigation">
-          <Link href="/" className="supplier-nav-link">
-            01  Overview
-          </Link>
-          <Link href="/suppliers" className="supplier-nav-link active">
-            02  Supplier directory
-          </Link>
-          <Link href="/incidents" className="supplier-nav-link">
-            03  Incident analyzer
-          </Link>
-        </nav>
-        <small className="supplier-connected">● Supplier API connected locally</small>
-      </aside>
-
-      <section className="supplier-main">
-        <header className="supplier-header">
-          <div>
-            <p>Human resources operations / Nexova</p>
-            <h1>Supplier directory</h1>
-          </div>
-          <span>PS</span>
-        </header>
-
-        <div className="supplier-content">
-          <section className="supplier-hero" id="list">
+    <BackofficeShell
+      eyebrow="Human resources operations / Nexova"
+      title="Supplier directory"
+      initials="PS"
+      connectedLabel="Supplier API connected locally"
+      pageClassName="supplier-page"
+    >
+        <section className="supplier-hero" id="list">
             <div>
               <p>01 / Directory</p>
               <h2>Single source of truth for recurrent supplier contracts.</h2>
@@ -500,9 +286,7 @@ export default function SuppliersPage() {
                 ) : (
                   suppliers.map((supplier) => {
                     const isBusy = Boolean(rowBusy[supplier.id]);
-                    const renewalSoon = isRenewalWithin60Days(
-                      supplier.contract_renewal_date
-                    );
+                    const renewalSoon = renewalSoonById[supplier.id] ?? false;
 
                     return (
                       <tr key={supplier.id}>
@@ -581,167 +365,7 @@ export default function SuppliersPage() {
             </table>
           </section>
 
-          <section className="supplier-form-card" id="new-supplier">
-            <header>
-              <div>
-                <p>02 / Registration</p>
-                <h2>Register new supplier</h2>
-              </div>
-              <small>POST /suppliers</small>
-            </header>
-
-            <form onSubmit={handleCreateSupplier} noValidate>
-              <div className="supplier-form-grid">
-                <label>
-                  Supplier name *
-                  <input
-                    type="text"
-                    value={newSupplier.name}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        name: event.target.value,
-                      }))
-                    }
-                    required
-                  />
-                </label>
-
-                <label>
-                  Country *
-                  <select
-                    value={newSupplier.country}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        country: event.target.value as SupplierCountry,
-                      }))
-                    }
-                  >
-                    <option value="Spain">Spain</option>
-                    <option value="USA">USA</option>
-                  </select>
-                </label>
-
-                <label>
-                  Currency
-                  <input
-                    type="text"
-                    value={newSupplier.country === "Spain" ? "EUR" : "USD"}
-                    readOnly
-                  />
-                </label>
-
-                <label>
-                  Monthly rate *
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={newSupplier.monthly_rate}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        monthly_rate: event.target.value,
-                      }))
-                    }
-                    required
-                  />
-                </label>
-
-                <label>
-                  Status *
-                  <select
-                    value={newSupplier.status}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        status: event.target.value as SupplierStatus,
-                      }))
-                    }
-                  >
-                    <option value="active">active</option>
-                    <option value="suspended">suspended</option>
-                  </select>
-                </label>
-
-                <label>
-                  Contract renewal date
-                  <input
-                    type="date"
-                    value={newSupplier.contract_renewal_date}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        contract_renewal_date: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-
-                <label>
-                  Contact email
-                  <input
-                    type="email"
-                    value={newSupplier.contact_email}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        contact_email: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-
-                <label>
-                  Notes
-                  <input
-                    type="text"
-                    value={newSupplier.notes}
-                    onChange={(event) =>
-                      setNewSupplier((current) => ({
-                        ...current,
-                        notes: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-
-              <fieldset className="category-group">
-                <legend>Categories *</legend>
-                <div>
-                  {CATEGORY_OPTIONS.map((category) => (
-                    <label key={category.value}>
-                      <input
-                        type="checkbox"
-                        checked={newSupplier.categories.includes(category.value)}
-                        onChange={() => handleCategoryToggle(category.value)}
-                      />
-                      <span>{category.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-
-              {formError ? (
-                <p className="supplier-error" role="alert">
-                  {formError}
-                </p>
-              ) : null}
-              {formSuccess ? (
-                <p className="supplier-success" role="status">
-                  {formSuccess}
-                </p>
-              ) : null}
-
-              <button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Registering..." : "Register supplier"}
-              </button>
-            </form>
-          </section>
-        </div>
-      </section>
-    </main>
+          <SupplierRegistrationForm onCreated={() => void loadSuppliers()} />
+    </BackofficeShell>
   );
 }

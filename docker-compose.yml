@@ -1,0 +1,67 @@
+name: nexova-monorepo
+
+services:
+  ui:
+    build:
+      context: ./uis
+    ports:
+      - "3000:3000" # website
+      - "3001:3001" # backoffice
+    environment:
+      # Browser-facing URLs (resolved by the host browser via published ports).
+      NEXT_PUBLIC_SUPPLIERS_API_URL: ${NEXT_PUBLIC_SUPPLIERS_API_URL}
+      NEXT_PUBLIC_INVENTORY_API_URL: ${NEXT_PUBLIC_INVENTORY_API_URL}
+      NEXT_PUBLIC_ANALYZER_API_URL: ${NEXT_PUBLIC_ANALYZER_API_URL}
+      # Reliable file watching over Windows/OneDrive bind mounts.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./uis:/app/uis
+      # backoffice imports the shared domain logic from the repo-root scripts/
+      # directory (`../../../scripts/...` resolves to /app/scripts). Turbopack's
+      # root is /app, so this must be mounted alongside /app/uis.
+      - ./scripts:/app/scripts:ro
+      # Anonymous volumes keep container-installed node_modules from being
+      # shadowed by the host's node_modules via the bind mount.
+      - /app/uis/website/node_modules
+      - /app/uis/backoffice/node_modules
+    depends_on:
+      - suppliers-api
+      - inventory-api
+    networks:
+      - nexova-net
+
+  suppliers-api:
+    build:
+      context: ./backrooms/services
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backrooms/services:/app/backrooms/services
+    networks:
+      - nexova-net
+
+  inventory-api:
+    build:
+      context: ./backrooms/services
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backrooms/services:/app/backrooms/services
+    # Same image, different app entrypoint and port.
+    command: sh -c "cd /app/backrooms/services/Inventory-API && uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
+    networks:
+      - nexova-net
+
+networks:
+  nexova-net:
+    name: nexova-net
+    driver: bridge

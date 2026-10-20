@@ -26,14 +26,13 @@ from services.Supply_directory_API.database import get_db
 from services.Supply_directory_API.models import (
 	AuthenticatedUser,
 	ChangePasswordRequest,
+	CurrentUserWithProfile,
 	ForgotPasswordRequest,
 	LoginRequest,
 	MessageResponse,
 	ProfileResponse,
 	ResetPasswordRequest,
 	TokenResponse,
-	UserResponse,
-	UserWithProfile,
 )
 
 
@@ -50,13 +49,14 @@ EMAIL_UNAVAILABLE_MESSAGE = (
 )
 
 
-def _user_response(user: AuthenticatedUser) -> UserResponse:
-	return UserResponse(id=user.id, **user.model_dump(exclude={"id", "hashed_password"}))
-
-
 def _profile_response(profile_entry) -> ProfileResponse:
 	profile_id, profile = profile_entry
-	return ProfileResponse(id=profile_id, **profile.model_dump())
+	return ProfileResponse(
+		id=profile_id,
+		name=profile.name,
+		phone=profile.phone,
+		address=profile.address,
+	)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -87,14 +87,18 @@ def login(payload: LoginRequest) -> TokenResponse:
 	return TokenResponse(access_token=token, expires_in=expires_in)
 
 
-@router.get("/me", response_model=UserWithProfile)
-def get_me(current_user: AuthenticatedUser = Depends(get_current_user)) -> UserWithProfile:
+@router.get("/me", response_model=CurrentUserWithProfile)
+def get_me(
+	current_user: AuthenticatedUser = Depends(get_current_user),
+) -> CurrentUserWithProfile:
 	with get_db() as db:
 		profile_entry = get_profile_by_user_id(db, current_user.id)
 	if profile_entry is None:
 		raise HTTPException(status_code=404, detail="Profile not found")
-	return UserWithProfile(
-		**_user_response(current_user).model_dump(),
+	return CurrentUserWithProfile(
+		id=current_user.id,
+		email=current_user.email,
+		role=current_user.role,
 		profile=_profile_response(profile_entry),
 	)
 

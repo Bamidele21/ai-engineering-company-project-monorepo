@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type FormValues = {
   fullName: string;
@@ -115,7 +115,7 @@ export default function ApplicationPage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSuccessOpen, setIsSuccessOpen] = useState(false);
 
-  const commentsRemaining = useMemo(() => 500 - values.comments.length, [values.comments]);
+  const commentsRemaining = 500 - values.comments.length;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

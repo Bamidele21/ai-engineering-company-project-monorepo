@@ -6,16 +6,31 @@ from pydantic import BaseModel, Field
 
 from services.Supply_directory_API.auth.dependencies import get_current_user
 from services.Supply_directory_API.database import get_db, get_suppliers_table
-from services.Supply_directory_API.models import AuthenticatedUser, Supplier, SupplierCountry, SupplierStatus
+from services.cache import TtlCache
+from services.Supply_directory_API.models import (
+	AuthenticatedUser,
+	MessageResponse,
+	SupplierCountry,
+	SupplierCreate,
+	SupplierListItem,
+	SupplierRecord,
+	SupplierStatus,
+)
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
 
+# Supplier contracts are low-churn (monthly/quarterly), so a 30s TTL is a safe
+# freshness tradeoff: writes invalidate immediately, and the stale window only
+# affects other users' cached reads.
+SUPPLIERS_CACHE_TTL = 30.0
+_suppliers_cache = TtlCache()
 
-class SupplierRecord(Supplier):
-	id: int
+
+def _suppliers_cache_key(country: SupplierCountry | None, category: str | None) -> str:
+    return f"suppliers:{country or ''}:{category or ''}"
 
 
 class RateUpdatePayload(BaseModel):
@@ -26,9 +41,9 @@ class StatusUpdatePayload(BaseModel):
 	status: SupplierStatus
 
 
-def _as_storable(supplier: Supplier) -> dict:
+def _as_storable(supplier: SupplierCreate) -> dict:
 	data = supplier.model_dump()
-	data["updated_at"] = supplier.updated_at.isoformat()
+	data["updated_at"] = datetime.now(timezone.utc).isoformat()
 	return data
 
 
@@ -60,7 +75,7 @@ def _require_supplier_writer(current_user: AuthenticatedUser) -> None:
 
 @router.post("", response_model=SupplierRecord, status_code=201)
 def create_supplier(
-	payload: Supplier,
+	payload: SupplierCreate,
 	current_user: AuthenticatedUser = Depends(get_current_user),
 ):
 	_require_supplier_writer(current_user)
@@ -68,15 +83,21 @@ def create_supplier(
 		table = get_suppliers_table(db)
 		doc_id = table.insert(_as_storable(payload))
 		created = _get_after_write(table, doc_id)
+		_suppliers_cache.invalidate("suppliers:")
 		return _attach_id(created)
 
 
-@router.get("", response_model=list[SupplierRecord])
+@router.get("", response_model=list[SupplierListItem])
 def list_suppliers(
 	country: SupplierCountry | None = Query(default=None),
 	category: str | None = Query(default=None),
 	current_user: AuthenticatedUser = Depends(get_current_user),
 ):
+	cache_key = _suppliers_cache_key(country, category)
+	cached = _suppliers_cache.get(cache_key)
+	if cached is not None:
+		return cached
+
 	with get_db() as db:
 		table = get_suppliers_table(db)
 		docs = table.all()
@@ -89,6 +110,7 @@ def list_suppliers(
 		if matches_country and matches_category:
 			results.append(_attach_id(doc))
 
+	_suppliers_cache.set(cache_key, results, SUPPLIERS_CACHE_TTL)
 	return results
 
 
@@ -122,6 +144,7 @@ def update_supplier_rate(
 			doc_ids=[supplier_id],
 		)
 		updated = _get_after_write(table, supplier_id)
+		_suppliers_cache.invalidate("suppliers:")
 
 	return _attach_id(updated)
 
@@ -138,11 +161,12 @@ def update_supplier_status(
 		_find_supplier_or_404(table, supplier_id)
 		table.update({"status": payload.status}, doc_ids=[supplier_id])
 		updated = _get_after_write(table, supplier_id)
+		_suppliers_cache.invalidate("suppliers:")
 
 	return _attach_id(updated)
 
 
-@router.delete("/{supplier_id}", status_code=200)
+@router.delete("/{supplier_id}", response_model=MessageResponse, status_code=200)
 def delete_supplier(
 	supplier_id: int,
 	current_user: AuthenticatedUser = Depends(get_current_user),
@@ -152,5 +176,6 @@ def delete_supplier(
 		table = get_suppliers_table(db)
 		_find_supplier_or_404(table, supplier_id)
 		table.remove(doc_ids=[supplier_id])
+		_suppliers_cache.invalidate("suppliers:")
 
-	return {"detail": "Supplier deleted"}
+	return MessageResponse(detail="Supplier deleted")

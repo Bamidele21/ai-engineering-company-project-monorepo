@@ -1,0 +1,166 @@
+"""Shared pytest bootstrap for the Nexova Supply Directory API test suite.
+
+This conftest is loaded before any test module so it can:
+
+1. Make the ``services.Supply_directory_API`` package importable by adding the
+   ``backrooms`` directory to ``sys.path``.
+2. Set the environment variables that ``auth.security`` and ``auth.email`` read
+   at import time (so they never depend on a local ``.env`` during a test run).
+3. Expose fixtures that run each test against an isolated temporary TinyDB so
+   the tracked ``suppliers_db.json`` and local ``password_resets_db.json`` are
+   never touched, and stub the Resend sender so no real email is sent.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+# The `backrooms` directory is the parent of `services`, which is the directory
+# that contains this file. `services.Supply_directory_API.*` imports only work
+# when `backrooms` is importable.
+BACKROOMS_ROOT = Path(__file__).resolve().parent.parent
+if str(BACKROOMS_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKROOMS_ROOT))
+
+# Must be set before importing anything that reads the environment at import
+# time (auth.security and auth.email both call load_dotenv and read env vars).
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-for-pytest")
+os.environ.setdefault("JWT_EXPIRY_MINUTES", "30")
+os.environ.setdefault("PASSWORD_RESET_EXPIRY_MINUTES", "30")
+os.environ.setdefault("PASSWORD_RESET_URL", "http://localhost:3000/reset-password")
+os.environ.setdefault("RESEND_API_KEY", "test-api-key-for-pytest")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from services.Supply_directory_API import database  # noqa: E402
+from services.Supply_directory_API.auth.services import (  # noqa: E402
+    get_user_entry_by_email,
+    update_user,
+)
+from services.Supply_directory_API.database import get_db  # noqa: E402
+from services.Supply_directory_API.main import app  # noqa: E402
+from services.Supply_directory_API.models import UserUpdate  # noqa: E402
+from services.Supply_directory_API.routes import auth as auth_routes  # noqa: E402
+from services.Supply_directory_API.routes import suppliers as suppliers_routes  # noqa: E402
+
+
+@pytest.fixture()
+def clear_suppliers_cache():
+    """Drop the supplier list cache before each test.
+
+    The cache is a module-level singleton, so without this a cached list from a
+    previous test's temporary TinyDB could leak into the next test.
+    """
+    suppliers_routes._suppliers_cache.clear()
+
+
+@pytest.fixture()
+def db(tmp_path, monkeypatch):
+    """Point TinyDB at an isolated temporary file for the duration of a test."""
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "suppliers_db.json")
+    monkeypatch.setattr(
+        database, "PASSWORD_RESETS_DB_PATH", tmp_path / "password_resets_db.json"
+    )
+    with get_db() as tiny_db:
+        yield tiny_db
+
+
+@pytest.fixture()
+def client(db, clear_suppliers_cache):
+    """A TestClient whose database writes land in an isolated temp TinyDB."""
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture()
+def registered_user(client):
+    """Register a single user and return its credentials for login."""
+    email = "user@nexova.com"
+    password = "initial-password-123"
+    response = client.post(
+        "/users",
+        json={"email": email, "password": password, "name": "Test User"},
+    )
+    assert response.status_code == 201
+    return {"email": email, "password": password}
+
+
+@pytest.fixture()
+def auth_headers(client, registered_user):
+    """Authorization headers for the user created by ``registered_user``."""
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": registered_user["email"],
+            "password": registered_user["password"],
+        },
+    )
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def email_sender(monkeypatch):
+    """Stub the Resend sender and record every attempted send."""
+    sent: list[dict] = []
+
+    def fake_send(to_email: str, token: str, expires_in_minutes: int) -> None:
+        sent.append(
+            {
+                "to": to_email,
+                "token": token,
+                "expires_in_minutes": expires_in_minutes,
+            }
+        )
+
+    monkeypatch.setattr(auth_routes, "send_password_reset_email", fake_send)
+    return sent
+
+
+def _register_with_role(client, email: str, password: str, role: str) -> dict:
+    """Register a user and promote it to ``role`` via the service layer."""
+    response = client.post(
+        "/users", json={"email": email, "password": password, "name": role.title()}
+    )
+    assert response.status_code == 201
+    with get_db() as db:
+        user_id, _ = get_user_entry_by_email(db, email)
+        update_user(db, user_id, UserUpdate(role=role))
+    return {"email": email, "password": password}
+
+
+def _headers_for(client, credentials: dict) -> dict:
+    response = client.post(
+        "/auth/login",
+        json={"email": credentials["email"], "password": credentials["password"]},
+    )
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def admin_user(client):
+    """A user with the ``admin`` role, for supplier write and user management."""
+    return _register_with_role(
+        client, "admin@nexova.com", "admin-password-123", "admin"
+    )
+
+
+@pytest.fixture()
+def manager_user(client):
+    """A user with the ``manager`` role, which can write supplier records."""
+    return _register_with_role(
+        client, "manager@nexova.com", "manager-password-123", "manager"
+    )
+
+
+@pytest.fixture()
+def admin_headers(client, admin_user):
+    return _headers_for(client, admin_user)
+
+
+@pytest.fixture()
+def manager_headers(client, manager_user):
+    return _headers_for(client, manager_user)

@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -34,6 +35,24 @@ _last_metrics: dict[str, Any] | None = None
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
+class IncidentAnalysisResponse(BaseModel):
+    """Serialized analyzer summary returned by ``POST /api/incidents/analyze``.
+
+    Mirrors only the fields the analyzer UI reads. ``score_counts`` stays
+    internal (the CSV export consumes the raw metrics directly).
+    """
+
+    total: int
+    valid: int
+    invalid: int
+    invalid_counts: dict[str, int]
+    category_counts: dict[str, int]
+    status_counts: dict[str, int]
+    closed_count: int
+    scored_count: int
+    average_score: float | None
+
+
 def _json_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     """Convert analyzer counters into JSON-compatible values."""
     return {
@@ -45,7 +64,6 @@ def _json_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "status_counts": dict(metrics["status_counts"]),
         "closed_count": metrics["closed_count"],
         "scored_count": metrics["scored_count"],
-        "score_counts": {str(key): value for key, value in metrics["score_counts"].items()},
         "average_score": metrics["average_score"],
     }
 
@@ -62,8 +80,8 @@ def _records_from_upload(content: bytes) -> list[dict[str, str]]:
         temporary_path.unlink(missing_ok=True)
 
 
-@app.post("/api/incidents/analyze")
-async def analyze_incidents(file: UploadFile = File(...)) -> dict[str, Any]:
+@app.post("/api/incidents/analyze", response_model=IncidentAnalysisResponse)
+async def analyze_incidents(file: UploadFile = File(...)) -> IncidentAnalysisResponse:
     """Validate and analyze an uploaded incident CSV file."""
     global _last_metrics
 
@@ -100,12 +118,25 @@ async def analyze_incidents(file: UploadFile = File(...)) -> dict[str, Any]:
             detail="The uploaded file is not a valid CSV.",
         ) from error
 
-    return _json_metrics(_last_metrics)
+    return IncidentAnalysisResponse(**_json_metrics(_last_metrics))
 
 
-@app.get("/api/incidents/results/export")
+@app.get(
+    "/api/incidents/results/export",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"text/csv": {}},
+            "description": "Aggregate metrics from the most recent analysis as CSV.",
+        }
+    },
+)
 def export_last_analysis() -> StreamingResponse:
-    """Download aggregate metrics from the most recent successful analysis."""
+    """Download aggregate metrics from the most recent successful analysis.
+
+    Documented ``response_model`` exception: this route streams a CSV file
+    rather than a JSON body, so no Pydantic response schema applies.
+    """
     if _last_metrics is None:
         raise HTTPException(status_code=404, detail="No incident analysis is available to export.")
 
