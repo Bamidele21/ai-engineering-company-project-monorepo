@@ -9,7 +9,14 @@ from services.Supply_directory_API.auth.services import get_user_entry_by_email
 from services.Supply_directory_API.database import get_db
 
 
-def _inbound(client, headers, asset_id, quantity, office="Valencia"):
+def _inbound(
+	client,
+	headers,
+	asset_id,
+	quantity,
+	office="Valencia",
+	unit_cost=10.0,
+):
 	return client.post(
 		"/inventory/orders/inbound",
 		headers=headers,
@@ -18,6 +25,8 @@ def _inbound(client, headers, asset_id, quantity, office="Valencia"):
 			"quantity": quantity,
 			"supplier": "TechDistrib Valencia S.L.",
 			"office": office,
+			"unit_cost": unit_cost,
+			"currency": "EUR" if office == "Valencia" else "USD",
 		},
 	)
 
@@ -105,7 +114,7 @@ def test_allocation_without_assigned_to_is_rejected(inventory_client, auth_heade
 
 
 def test_insufficient_stock_is_rejected_before_write(inventory_client, auth_headers, make_asset):
-	asset = make_asset(name="Ergonomic mouse", category="peripherals")
+	asset = make_asset(name="Ergonomic mouse", category="onboarding_equipment")
 	_inbound(inventory_client, auth_headers, asset["id"], 5)
 
 	orders_before = len(inventory_client.get("/inventory/orders").json())
@@ -124,21 +133,24 @@ def test_insufficient_stock_is_rejected_before_write(inventory_client, auth_head
 	assert product["current_stock"] == 5
 
 
-def test_duplicate_sku_returns_conflict(inventory_client, auth_headers, make_asset):
-	asset = make_asset(sku="NXV-IT-001")
+def test_duplicate_sku_returns_conflict(
+	inventory_client, auth_headers, make_asset, programme
+):
+	asset = make_asset(sku="NXV-CRT-001")
 
 	response = inventory_client.post(
 		"/inventory/products",
 		headers=auth_headers,
 		json={
-			"name": "Duplicate laptop",
-			"sku": "NXV-IT-001",
-			"category": "hardware",
+			"name": "Duplicate kit",
+			"sku": "NXV-CRT-001",
+			"category": "certification",
 			"office": "Miami",
+			"programme_id": programme.id,
 		},
 	)
 	assert response.status_code == 409
-	assert "NXV-IT-001" in response.json()["detail"]
+	assert "NXV-CRT-001" in response.json()["detail"]
 	assert asset["id"]
 
 
@@ -151,12 +163,20 @@ def test_unknown_asset_on_inbound_returns_not_found(inventory_client, auth_heade
 	assert response.status_code == 404
 
 
-def test_writes_require_authentication(inventory_client, make_asset, auth_headers):
+def test_writes_require_authentication(
+	inventory_client, make_asset, auth_headers, programme
+):
 	asset = make_asset()
 
 	created = inventory_client.post(
 		"/inventory/products",
-		json={"name": "No auth", "sku": "NXV-NA-001", "category": "hardware", "office": "Miami"},
+		json={
+			"name": "No auth",
+			"sku": "NXV-NA-001",
+			"category": "onboarding_equipment",
+			"office": "Miami",
+			"programme_id": programme.id,
+		},
 	)
 	assert created.status_code == 401
 
@@ -167,6 +187,8 @@ def test_writes_require_authentication(inventory_client, make_asset, auth_header
 			"quantity": 1,
 			"supplier": "X",
 			"office": "Valencia",
+			"unit_cost": 1.0,
+			"currency": "EUR",
 		},
 	)
 	assert inbound.status_code == 401
@@ -201,7 +223,7 @@ def test_both_offices_coexist_and_stock_is_per_asset(
 
 
 def test_orders_list_includes_asset_data(inventory_client, auth_headers, make_asset):
-	asset = make_asset(name="USB-C Hub", category="peripherals", office="Miami")
+	asset = make_asset(name="USB-C Hub", category="onboarding_equipment", office="Miami")
 	_inbound(inventory_client, auth_headers, asset["id"], 15, office="Miami")
 	_outbound(
 		inventory_client, auth_headers, asset["id"], 2, "allocation", "Roberto Díaz", office="Miami"

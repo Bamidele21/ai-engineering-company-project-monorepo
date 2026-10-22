@@ -27,22 +27,20 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import event  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
-from sqlmodel import SQLModel, create_engine  # noqa: E402
+from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
 import database  # noqa: E402
 import models  # noqa: E402,F401  (register tables)
 import main as inventory_main  # noqa: E402
+from models import Programme  # noqa: E402
 from routers import inventory as inventory_routes  # noqa: E402
 
 
 @pytest.fixture()
 def clear_inventory_cache():
-    """Drop the inventory products cache before each test.
-
-    The cache is a module-level singleton, so a cached product list from a
-    previous test's in-memory SQLite engine could leak into the next test.
-    """
+    """Drop module-level caches before each test."""
     inventory_routes._inventory_cache.clear()
+    inventory_routes._telemetry_throttle.clear()
 
 
 @pytest.fixture()
@@ -76,11 +74,29 @@ def inventory_client(sqlite_engine, monkeypatch, clear_inventory_cache):
 
 
 @pytest.fixture()
-def make_asset(inventory_client, auth_headers):
+def programme(sqlite_engine):
+	"""Create an isolated programme row for inventory writes."""
+	with Session(sqlite_engine) as session:
+		record = Programme(slug="test-programme", name="Test Programme")
+		session.add(record)
+		session.commit()
+		session.refresh(record)
+		return record
+
+
+@pytest.fixture()
+def make_asset(inventory_client, auth_headers, programme):
 	"""Create an asset through the API and return its response payload."""
 	counter = {"n": 0}
 
-	def _make(name="Laptop 14\" Business", category="hardware", office="Valencia", sku=None):
+	def _make(
+		name="B2B sales certification kit",
+		category="certification",
+		office="Valencia",
+		sku=None,
+		programme_id=None,
+		min_stock=10,
+	):
 		counter["n"] += 1
 		response = inventory_client.post(
 			"/inventory/products",
@@ -90,6 +106,8 @@ def make_asset(inventory_client, auth_headers):
 				"sku": sku or f"NXV-TST-{counter['n']:03d}",
 				"category": category,
 				"office": office,
+				"programme_id": programme_id or programme.id,
+				"min_stock": min_stock,
 			},
 		)
 		assert response.status_code == 201, response.text
