@@ -43,7 +43,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["Supply_directory_API/tests", "Inventory-API/tests", "APIs/tests"]
+testpaths = ["Supply_directory_API/tests", "Inventory-API/tests", "APIs/tests", "telemetry/tests"]
 
 [tool.coverage.run]
 source = [
@@ -52,4 +52,5 @@ source = [
     "services.Supply_directory_API.routes.suppliers",
     "services.Supply_directory_API.routes.users",
     "Inventory-API",
+    "services.telemetry",
 ]

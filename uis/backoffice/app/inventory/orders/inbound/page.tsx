@@ -5,16 +5,19 @@ import { FormEvent, Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { BackofficeShell } from "@/components/backoffice/BackofficeShell";
 import {
+  CURRENCY_BY_OFFICE,
   createInboundOrder,
   listAssets,
   type Asset,
   type Office,
 } from "@/lib/inventory";
+import { trackValidationFailure } from "@/lib/telemetry/validation";
 
 interface InboundFormState {
   asset_id: string;
   quantity: string;
   supplier: string;
+  unit_cost: string;
   office: Office;
 }
 
@@ -22,6 +25,7 @@ const INITIAL_FORM: InboundFormState = {
   asset_id: "",
   quantity: "",
   supplier: "",
+  unit_cost: "",
   office: "Valencia",
 };
 
@@ -76,19 +80,52 @@ function InboundOrderForm() {
     setFormError("");
     setFormSuccess("");
 
+    const currentPath =
+      typeof window === "undefined" ? "/" : window.location.pathname;
+
     const assetId = Number(form.asset_id);
     if (!Number.isInteger(assetId) || assetId <= 0) {
+      trackValidationFailure(
+        "inbound_order_form",
+        "asset_id",
+        "asset_required",
+        currentPath
+      );
       setFormError("Select the asset that was received.");
       return;
     }
 
     const quantity = Number(form.quantity);
     if (!Number.isInteger(quantity) || quantity <= 0) {
+      trackValidationFailure(
+        "inbound_order_form",
+        "quantity",
+        "quantity_gt_0",
+        currentPath
+      );
       setFormError("Quantity must be a whole number greater than zero.");
       return;
     }
 
+    const unitCost = Number(form.unit_cost);
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+      trackValidationFailure(
+        "inbound_order_form",
+        "unit_cost",
+        "unit_cost_gt_0",
+        currentPath
+      );
+      setFormError("Unit cost must be greater than zero.");
+      return;
+    }
+
     if (!form.supplier.trim()) {
+      trackValidationFailure(
+        "inbound_order_form",
+        "supplier",
+        "supplier_required",
+        currentPath
+      );
       setFormError("Supplier is required.");
       return;
     }
@@ -101,6 +138,8 @@ function InboundOrderForm() {
         quantity,
         supplier: form.supplier.trim(),
         office: form.office,
+        unit_cost: unitCost,
+        currency: CURRENCY_BY_OFFICE[form.office],
       });
 
       setFormSuccess("Inbound order registered successfully.");
@@ -179,6 +218,23 @@ function InboundOrderForm() {
           </label>
 
           <label>
+            Unit cost *
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={form.unit_cost}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  unit_cost: event.target.value,
+                }))
+              }
+              required
+            />
+          </label>
+
+          <label>
             Supplier *
             <input
               type="text"
@@ -189,7 +245,7 @@ function InboundOrderForm() {
                   supplier: event.target.value,
                 }))
               }
-              placeholder="TechDistrib Valencia S.L."
+              placeholder="PrintWorks Valencia S.L."
               required
             />
           </label>
@@ -210,6 +266,11 @@ function InboundOrderForm() {
             </select>
           </label>
         </div>
+
+        <p className="inventory-stock-hint">
+          Currency: <strong>{CURRENCY_BY_OFFICE[form.office]}</strong> — amounts
+          stay in the receiving office&apos;s local currency.
+        </p>
 
         {formError ? (
           <p className="inventory-error" role="alert">

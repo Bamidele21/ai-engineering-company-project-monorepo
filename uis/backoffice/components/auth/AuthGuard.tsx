@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { hasValidSession } from "@/lib/auth/storage";
+import { endSession } from "@/lib/telemetry/session";
 
 const PUBLIC_PATHS = ["/login", "/register", "/forgot-password", "/reset-password"];
 
@@ -27,6 +28,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
     if (!hasValidSession()) {
       setIsReady(false);
+      endSession();
       const next =
         pathname && pathname !== "/"
           ? `?next=${encodeURIComponent(pathname)}`

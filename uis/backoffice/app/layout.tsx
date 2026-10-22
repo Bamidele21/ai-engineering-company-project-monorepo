@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AccountBar } from "@/components/auth/AccountBar";
 import { AuthGuard } from "@/components/auth/AuthGuard";
+import { TelemetryBootstrap } from "@/components/telemetry/TelemetryBootstrap";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <TelemetryBootstrap />
         <AuthGuard>
           <AccountBar />
           {children}

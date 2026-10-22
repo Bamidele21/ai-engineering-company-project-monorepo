@@ -38,7 +38,7 @@
       "sessionId": {
         "type": "string",
         "format": "uuid",
-        "description": "UUIDv4 identifying one browser tab session. The web client creates it once per tab in sessionStorage and sends it as the X-Session-Id header; the APIs adopt the header when present and generate a fresh per-request UUID otherwise (server-side session, not persisted). Never null."
+        "description": "UUIDv4 identifying one browser page-lifetime session. The web client keeps it in session memory (no sessionStorage), rotates it on successful login, rotates back to anonymous on logout/401, and sends it as the X-Session-Id header. A hard reload starts a new anonymous session and re-binds to a valid token. The APIs adopt the header when present and generate a fresh per-request UUID otherwise (server-side session, not persisted). Never null."
       },
       "userId": {
         "type": ["string", "null"],
@@ -884,7 +884,7 @@
       "hypothesis": "We need to know which backoffice sections operators actually visit most.",
       "decision": "Prioritise features and training on hot sections; simplify or cut underused ones.",
       "emitters": ["web"],
-      "throttle": "No dropping (visit counts are the point); transport-level batching only: buffer 30 s or 20 events, flush with keepalive on pagehide.",
+      "throttle": "No dropping (visit counts are the point); transport-level batching only: flush no later than 10 s after the first pending event or at 20 events, then use navigator.sendBeacon on visibilitychange to hidden with a normal-send fallback when Beacon is refused.",
       "properties_schema": {
         "type": "object",
         "additionalProperties": false,

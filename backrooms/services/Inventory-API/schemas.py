@@ -11,12 +11,12 @@ from pydantic import BaseModel, Field, model_validator
 
 
 AssetCategory = Literal[
-	"hardware",
-	"peripherals",
-	"office_supplies",
-	"training_materials",
+	"training_kit",
+	"certification",
+	"onboarding_equipment",
 ]
 Office = Literal["Valencia", "Miami"]
+Currency = Literal["EUR", "USD"]
 ExitType = Literal["allocation", "consumption"]
 
 
@@ -25,6 +25,8 @@ class AssetCreate(BaseModel):
 	sku: str = Field(min_length=1)
 	category: AssetCategory
 	office: Office
+	programme_id: int
+	min_stock: int = Field(default=10, ge=0)
 
 
 class AssetRead(BaseModel):
@@ -33,6 +35,8 @@ class AssetRead(BaseModel):
 	sku: str
 	category: str
 	office: str
+	programme_id: int | None
+	min_stock: int
 	current_stock: int
 
 
@@ -41,6 +45,15 @@ class AssetEntryCreate(BaseModel):
 	quantity: int = Field(gt=0)
 	supplier: str = Field(min_length=1)
 	office: Office
+	unit_cost: float = Field(gt=0)
+	currency: Currency
+
+	@model_validator(mode="after")
+	def validate_currency_matches_office(self) -> "AssetEntryCreate":
+		expected = "EUR" if self.office == "Valencia" else "USD"
+		if self.currency != expected:
+			raise ValueError(f"Orders in {self.office} must use {expected}")
+		return self
 
 
 class AssetEntryRead(BaseModel):
@@ -49,6 +62,8 @@ class AssetEntryRead(BaseModel):
 	quantity: int
 	supplier: str
 	office: str
+	unit_cost: float
+	currency: str
 	created_at: datetime
 	user_uuid: str
 
@@ -95,6 +110,8 @@ class OrderRead(BaseModel):
 	created_at: datetime
 	user_uuid: str
 	supplier: str | None = None
+	unit_cost: float | None = None
+	currency: str | None = None
 	exit_type: str | None = None
 	assigned_to: str | None = None
 
