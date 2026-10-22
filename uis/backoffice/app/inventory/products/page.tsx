@@ -101,7 +101,7 @@ export default function InventoryProductsPage() {
               </tr>
             ) : (
               assets.map((asset) => {
-                const level = stockLevel(asset.current_stock);
+                const level = stockLevel(asset.current_stock, asset.min_stock);
 
                 return (
                   <tr key={asset.id}>

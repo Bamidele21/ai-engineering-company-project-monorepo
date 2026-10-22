@@ -42,11 +42,13 @@ def test_seed_creates_records_with_expected_net_stock(sqlite_engine, monkeypatch
 		assert len(session.exec(select(AssetEntry)).all()) == len(seed.ENTRIES_SEED)
 		assert len(session.exec(select(AssetExit)).all()) == len(seed.EXITS_SEED)
 
-		# net = entries - exits, matching CONTEXT seed quantities.
-		assert _net_stock(session, assets["NXV-IT-001"].id) == 15 - 3
-		assert _net_stock(session, assets["NXV-PER-001"].id) == 20 - 5
-		assert _net_stock(session, assets["NXV-OFF-001"].id) == 50 - 12
-		assert _net_stock(session, assets["NXV-TRN-001"].id) == 0
+		# net = entries - exits, matching the telemetry seed quantities.
+		assert _net_stock(session, assets["NXV-CRT-001"].id) == 15 - 3
+		assert _net_stock(session, assets["NXV-TRN-002"].id) == 15 - 5
+		assert _net_stock(session, assets["NXV-OFF-001"].id) == 40 - 12
+		assert _net_stock(session, assets["NXV-OFF-002"].id) == 12 - 2
+		assert _net_stock(session, assets["NXV-TRN-001"].id) == 20
+		assert _net_stock(session, assets["NXV-CRT-002"].id) == 0
 
 
 def test_seed_is_idempotent(sqlite_engine, monkeypatch, db):
@@ -64,7 +66,12 @@ def test_seed_skips_when_assets_already_exist(sqlite_engine, monkeypatch, db):
 	monkeypatch.setattr(database, "engine", sqlite_engine)
 	with Session(sqlite_engine) as session:
 		session.add(
-			Asset(name="Manual asset", sku="NXV-MAN-001", category="hardware", office="Miami")
+			Asset(
+				name="Manual asset",
+				sku="NXV-MAN-001",
+				category="onboarding_equipment",
+				office="Miami",
+			)
 		)
 		session.commit()
 

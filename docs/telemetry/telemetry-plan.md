@@ -237,7 +237,7 @@ Fires when the unit cost of an inbound order varies more than 10% from the histo
 - **We capture `page_view` because** we need to know which backoffice sections operators actually visit most, **which allows us to make the decision** to prioritise features and training on hot sections; simplify or cut underused ones.
 - **Emitter:** NEW `uis/backoffice/components/telemetry/PageViewTracker.tsx` (client component using `usePathname`), mounted once in `uis/backoffice/app/layout.tsx` body. One point covers every route — including the dashboard's own sidebar (`app/page.tsx:26`) and `/login`.
 - **Allowlist (required):** `page_path` (query string ALWAYS stripped — `/login?next=…` and `/reset-password?token=…` must never leak). **Optional:** `load_duration_ms` (from `performance.getEntriesByType("navigation")[0]?.duration`), `referrer_path` (same-origin only).
-- **Throttle:** no dropping; transport-level batching only (30 s / 20-event buffer, `pagehide` keepalive flush).
+- **Throttle:** no dropping; transport-level batching only (10 s / 20-event buffer, `visibilitychange` Beacon flush with a normal-send fallback).
 
 ##### `form_abandoned` — opportunity · batch
 - **We capture `form_abandoned` because** we need to know which flows lose operators before completion, **which allows us to make the decision** to redesign or re-train on the abandoned flows.
@@ -316,7 +316,7 @@ Every event, from every source, carries these nine fields. The draft-07 schema i
 |---|---|---|---|
 | `eventId` | string (UUIDv4) | emitter | `crypto.randomUUID()` on web; `uuid.uuid4()` on APIs. Unique per event instance. |
 | `timestamp` | string, ISO 8601 UTC | emitter | Emission time with millisecond precision, e.g. `2026-10-18T14:00:00.000Z`. Always UTC — emitters never attach offsets. |
-| `sessionId` | string (UUIDv4) | web; APIs adopt | The web client creates one UUID per tab in `sessionStorage` (`nexova.telemetry.sessionId`) and sends it as `X-Session-Id` on every fetch. API middleware adopts the header; if absent (direct API call), it generates a fresh per-request UUID (server-side session, not persisted). Never null. |
+| `sessionId` | string (UUIDv4) | web; APIs adopt | The web client creates one UUID per page lifetime in session memory (no `sessionStorage`), sends it as `X-Session-Id` on every fetch, and rotates it on successful login. Logout or a 401 rotates it back to an anonymous session. A hard reload starts a new anonymous session and re-binds to the authenticated token when one is valid. API middleware adopts the header; if absent (direct API call), it generates a fresh per-request UUID (server-side session, not persisted). Never null. |
 | `userId` | string \| null | APIs from JWT `sub`; web decodes the token | Stringified TinyDB **integer id** from the JWT `sub` claim — NOT the `user_uuid` orders store; join via the admin `/users` lookup. Null when unauthenticated (login failures, password flows, registration, analyzer, `/login` page views). Never an email, never the uuid. |
 | `event_type` | string | emitter | One of the 22 catalogue values (§4.3). |
 | `schemaVersion` | string `X.Y` | emitter | Version of **this event's** `properties_schema` (`schema_version` in the catalogue). |
@@ -334,6 +334,12 @@ An operator submits an outbound order:
 4. Had the FE validation failed instead, `validation_failed` (FE) would carry `requestId: R`, `sessionId: S` — and `outbound_order_created` would never fire.
 
 Every event caused by one user action — frontend and backend — shares one `requestId`; `sessionId` ties them to one tab session; `userId` ties them to one person.
+
+### 5.2.1 Emitter ownership (Sprint 1 contract)
+
+The **Inventory API is canonical for all five mandatory inventory events** and for `outbound_order_rejected`. It emits them through the shared backend emitter after the business fact is confirmed, using the request's `X-Request-Id` and `X-Session-Id`. The backoffice does **not** re-emit business facts; it emits only navigation, client validation, network failures, and uncaught frontend errors. This prevents double counting and keeps threshold/variance/rejection facts authoritative.
+
+The validating receiver is hosted by the **Inventory API** at `POST /telemetry/events`. `TELEMETRY_ENDPOINT` configures backend delivery; `NEXT_PUBLIC_TELEMETRY_ENDPOINT` configures the browser. Sprint 2 retains both the URL and the envelope model.
 
 ### 5.3 Shared property dictionary
 
@@ -445,7 +451,7 @@ Default batch window: **daily flush at 02:00 UTC**, kept configurable per event.
 
 | Event | Strategy |
 |---|---|
-| `page_view` | No dropping (visit counts are the point). Transport-level batching only: FE buffers, flushes every 30 s or at 20 events, plus `fetch(…, { keepalive: true })` on `pagehide`. |
+| `page_view` | No dropping (visit counts are the point). Transport-level batching only: FE buffers and flushes no later than 10 s after the first pending event or at 20 events, whichever comes first, then uses `navigator.sendBeacon` on `visibilitychange` to hidden with a normal-send fallback when Beacon is refused. Delivery is best-effort; browser termination and offline periods are not guaranteed. |
 | `api_latency_recorded` | Emit only ≥ 500 ms; debounce 1/(service, method, path)/60 s. Sub-threshold requests emit nothing (counter-only). |
 | `frontend_error_captured` | Cap 10/min/session; identical (error_type, message) suppressed for 5 min. |
 | `network_request_failed` | 1/(target, page_path)/60 s. |
@@ -520,7 +526,7 @@ Everything in §7's "never captured" list, plus: exact failed-login timestamps p
 | Null `userId` on unauthenticated endpoints | Expected and schema-legal; documented per event (analyzer, password flows, registration). |
 | TinyDB int id (userId) vs `user_uuid` on orders | Documented join path via the admin `/users` lookup; `order_id` in inventory events lets reports resolve order → user_uuid → user id. |
 | Category-literal migration ordering | EC7 must land **before** any telemetry activation, or events would emit the old literals. |
-| `page_view` buffer loss on hard close | `pagehide` keepalive flush mitigates; residual loss is accepted for a batch navigation signal. |
+| `page_view` buffer loss on hard close | `visibilitychange` Beacon flush mitigates; residual loss is accepted for a batch navigation signal. |
 | Frontend-generated ids (sessionId/requestId) are client-controlled | Accepted: they are correlation hints, not security boundaries; backend adopts but never trusts them for authorisation. |
 | `assigned_to` regression | Schema-level ban: `outbound_order_created.properties_schema` has no such key, so any emitter adding it fails validation in the Capture milestone. |
 
@@ -534,7 +540,7 @@ The website, talent-pipeline-tracker, and landing page are not instrumented — 
 
 These are net-new hooks without which the events above cannot fire. **They are described here, not implemented in this milestone** ("before writing a single line of instrumentation"). Each names the file it touches; the Capture milestone implements them in this dependency order.
 
-- **EC1 — Telemetry middleware + shared emitter.** NEW `backrooms/services/telemetry.py` (importable as `services.telemetry`, next to `services.cache`): `TelemetryMiddleware` (adopts/generates `X-Request-Id` + `X-Session-Id`, echoes the response header, times the request, emits `api_latency_recorded` ≥ 500 ms with the 60 s debounce, exposes `request.state.telemetry`); `emit_event(event_type, properties, request)` building the full envelope (eventId, UTC timestamp, sessionId, userId from token `sub` when present, source, schemaVersion); `OFFICE_CURRENCY = {"valencia": "EUR", "miami": "USD"}` and `lower_office()`; path-template sanitizer; PII sanitizers. Register after CORS in `Inventory-API/main.py:51-57`, `Supply_directory_API/main.py`, and `APIs/analyzer-api.py:26-33`. Transport: structured JSON log line per event on logger `nexova.telemetry` (consumed by the later Capture milestone); the web client posts to `NEXT_PUBLIC_TELEMETRY_ENDPOINT` when set and silently no-ops otherwise (instrument now, activate later).
+- **EC1 — Telemetry receiver + shared emitter.** NEW `backrooms/services/telemetry/` package (importable as `services.telemetry`, next to `services.cache`): `models.py` defines the reusable `TelemetryEvent` envelope; `router.py` exposes `POST /telemetry/events` for format validation and returns `{ "received": N }` without persistence; `emitter.py` builds the full envelope (eventId, UTC timestamp, sessionId, userId from token `sub` when present, source, schemaVersion), adopts `X-Request-Id`/`X-Session-Id`, validates the event property allowlist, and batches inventory-origin events no later than 10 s after the first pending event or at 20 events. `OFFICE_CURRENCY = {"valencia": "EUR", "miami": "USD"}` and `lower_office()` live in `constants.py`. Register the router in the selected host, the Inventory API (`Inventory-API/main.py`). The backend reads `TELEMETRY_ENDPOINT`; the web client posts to `NEXT_PUBLIC_TELEMETRY_ENDPOINT` when set and silently no-ops otherwise. Sprint 1 uses the receiver as a validating stub; Sprint 2 replaces its internals with per-event validation and Supabase persistence.
 - **EC2 — Token-expiry split.** `Supply_directory_API/auth/dependencies.py:13-21`: catch `jwt.ExpiredSignatureError` before the generic `(RuntimeError, ValueError)`, read `sub` via unverified decode, emit `session_expired` (server), then raise 401 with detail `"Session expired"`.
 - **EC3 — Direct-stock-edit stub routes.** `Inventory-API/routers/inventory.py`: six stubs — `PUT`/`PATCH`/`DELETE` × `/products` and `/products/{asset_id}` — routing to `_reject_direct_stock_edit()`, which emits `direct_stock_edit_rejected` and raises 405. The stubs create the hook without creating an edit capability.
 - **EC4 — `min_stock`.** `Inventory-API/models.py` `Asset`: `min_stock: int = 10`; `schemas.py` `AssetCreate`: optional `min_stock`; post-commit edge check in `create_outbound_order` using the pre-commit `available` (`inventory.py:138`).
@@ -543,13 +549,13 @@ These are net-new hooks without which the events above cannot fire. **They are d
 - **EC7 — Category literal migration.** `Inventory-API/schemas.py:13-18` → `training_kit | certification | onboarding_equipment`; FE mirror `uis/backoffice/lib/inventory.ts:9-13` and `CATEGORY_LABELS` (:86-91); existing seed rows rewritten in the seed milestone. Must land before telemetry activation.
 - **EC8 — 422 handler.** `Inventory-API/main.py`: `RequestValidationError` handler emitting `validation_failed` (field names from `exc.errors()`, never values) and returning the standard 422 body.
 - **EC9 — Auth/business emit points.** `routes/auth.py` (login :86 / :66-71 / :75-77 / :79-84; forgot-password :152 / :110-115 / :124-131 / :140-145; reset-password :157-163 / :165-169); `routes/users.py` (register :45; role-change pre-fetch + emit in `update_user_record` :68-84); `routes/suppliers.py` (old rate from :137, emit after :146); `APIs/analyzer-api.py` (emit after :111).
-- **EC10 — FE telemetry client.** NEW `uis/backoffice/lib/telemetry/session.ts` (sessionStorage sessionId), `lib/telemetry/client.ts` (envelope builder; userId from token `sub` via an extended `lib/auth/storage.ts` decode; 30 s / 20-event buffer with `pagehide` keepalive), `components/telemetry/PageViewTracker.tsx` + `lib/telemetry/error-listeners.ts` (mounted in `app/layout.tsx`), `lib/telemetry/useFormAbandonment.ts` (inbound, outbound, supplier-registration, forgot-password forms), `X-Request-Id`/`X-Session-Id` headers in `lib/auth/client.ts` `buildHeaders` (:24-41), `network_request_failed` in the catch (:54-58), `session_expired` (client) in `AuthGuard.tsx` (:22-39), `validation_failed` (client) in the three forms' validation branches.
+- **EC10 — FE telemetry client.** NEW `uis/backoffice/lib/telemetry/session.ts` (in-memory anonymous session; rotate on login; clear on logout/401; userId from token `sub`), `lib/telemetry/telemetry.ts` (single public `track(eventType, properties)`; envelope builder; 10 s / 20-event buffer with a first-pending timer; `visibilitychange` + `sendBeacon`; initial send plus three exponential-backoff retries; in-flight batch kept separate), `lib/telemetry/{constants,catalog,sanitize}.ts`, `components/telemetry/TelemetryBootstrap.tsx` + `PageViewTracker.tsx` + `lib/telemetry/error-listeners.ts` (mounted in `app/layout.tsx`), `X-Request-Id`/`X-Session-Id` headers in `lib/auth/client.ts` `buildHeaders` (:24-41), `network_request_failed` in the catch (:54-58), `validation_failed` (client) in the inbound and outbound validation branches. `form_abandoned`, authentication events, and Web Vitals are deferred opportunity work in Sprint 1.
 
 ---
 
 ## 10. Instrumentation implementation map
 
-This is the section another developer instruments from, without clarification.
+This is the section another developer instruments from, without clarification. Sprint 1 ownership follows §5.2.1: the Inventory API emits every mandatory business event (including `direct_stock_edit_rejected` and `outbound_order_rejected`), while the web app emits only the technical events marked `web`.
 
 | event_type | Frontend (file:line) | Backend (file:line) | Requires |
 |---|---|---|---|
