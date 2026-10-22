@@ -63,8 +63,10 @@ class TelemetryEvent(BaseModel):
 class TelemetryBatch(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
-	events: list[TelemetryEvent] = Field(default_factory=list)
+	events: list[Any]
 
 
 class TelemetryResponse(BaseModel):
 	received: int
+	stored: int
+	rejected: int

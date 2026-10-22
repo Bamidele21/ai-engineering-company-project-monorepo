@@ -1,5 +1,43 @@
 # Progress
 
+# Telemetry Sprint 2 — validate individually and persist in Supabase (2026-10-21)
+
+Scope changed:
+1. `backrooms/services/Inventory-API/migrations/002_telemetry_events.sql` (new) — eight-column table, three indexes, RLS, and anon/authenticated revokes.
+2. `backrooms/services/telemetry/storage.py` (new) — telemetry table metadata, service/level/value/message mapping, sanitisation, reserved `_meta`, bulk insert, and dialect-aware table setup.
+3. `backrooms/services/telemetry/catalog.py` (new) — full 22-event catalogue, emitters, schema versions, required/allowlist parity, type/enum/min/max validation, and nullable exceptions.
+4. `backrooms/services/telemetry/models.py` — loose `TelemetryBatch.events` and `{received, stored, rejected}` response; `TelemetryEvent` unchanged.
+5. `backrooms/services/telemetry/router.py` — per-item model/catalogue validation, partial rejection, single bulk insert, 503 rollback path.
+6. `backrooms/services/telemetry/emitter.py` — now validates through the static catalogue.
+7. `backrooms/services/Inventory-API/database.py` — startup migration/table setup for Postgres and SQLite.
+8. Tests: `Inventory-API/tests/test_telemetry_endpoint.py` rewritten; `telemetry/tests/test_catalog.py` added; `telemetry/tests/test_emitter.py` updated.
+9. `docs/telemetry/telemetry-plan.md` — Sprint 2 storage mapping, `_meta`, sanitisation, duplicate semantics, indexes, access, and migration path.
+10. No `uis/backoffice` file changed in Sprint 2.
+
+What changed:
+1. Replaced the validating stub with a real endpoint that accepts a loose `{ "events": [...] }` envelope, validates each item with the unchanged `TelemetryEvent` plus the static catalogue, and persists valid siblings even when others are rejected.
+2. Added one bulk `INSERT` per valid batch in one transaction; all-invalid batches perform no database call; database failures roll back and return `503`.
+3. Added `telemetry_events` in the confirmed Supabase project with `id uuid default gen_random_uuid()`, `timestamptz`, `service`, `event_type`, `level`, nullable `numeric value`/`text message`, and `jsonb tags`; exactly the timestamp, event-type, and GIN-tags indexes.
+4. Mapped `web` to `backoffice`, preserved API services, mapped error/warn/info levels, stored documented numeric `value` fields, sanitised error messages, stripped query strings, and stored reserved envelope metadata under `tags._meta`.
+5. Enabled RLS and revoked `anon`/`authenticated`; the backend uses direct database credentials.
+6. Documented duplicate-delivery semantics: retries/Beacon can create duplicate rows, and no exactly-once guarantee or unique constraint is claimed.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 205 passed (2 pre-existing deprecation warnings).
+2. `npx jest --runInBand` from the repository root: 85 passed across 13 suites; backoffice lint and build passed.
+3. Live Supabase migration inspection: eight columns, three required indexes plus the primary-key index, `rls enabled = true`, and no `anon`/`authenticated` grants.
+4. Live mixed-batch smoke: `{"received":3,"stored":1,"rejected":2}` with the valid page view persisted.
+5. Live real-workflow data: 61 stored rows at the final check — 35 `inbound_order_created`, 19 `outbound_order_created`, 2 `outbound_order_rejected`, 3 `stock_threshold_triggered`, 1 `kit_cost_variance_detected` (97.53% variance), and 1 `page_view`. The controlled generation run produced the first 29; additional backoffice/API activity arrived during verification. All 61 rows have distinct `eventId` metadata values.
+6. `git diff --check`: repository LF→CRLF notices only.
+7. No protected path modified in Sprint 2. `.env`, `CONTEXT.md`, `infra/**`, `data/raw/**`, `internal/**`, `mcps/**`, and lockfiles were untouched.
+
+Remaining risks / notes:
+1. Duplicate telemetry rows are intentionally possible; `tags._meta.eventId` is available for a future dedupe policy.
+2. `tags._meta` is reserved storage metadata; Sprint 3 report extraction must ignore it.
+3. The Postgres migration is applied on Inventory API startup and is idempotent; SQLite tests use equivalent SQLAlchemy metadata. Production should still adopt Alembic before schema churn grows.
+4. `service_role` retains server-side grants on the table; browser/anon access is revoked and the frontend has no Supabase client.
+5. Legacy cost history/zero-cost rows can affect early variance interpretation; live variance evidence is 97.53% against the historical mean.
+
 # Telemetry Sprint 1 — capture and validate events (2026-10-21)
 
 Scope changed:
