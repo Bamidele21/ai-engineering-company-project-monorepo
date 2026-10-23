@@ -1,5 +1,48 @@
 # Progress
 
+# Telemetry Sprint 3 — cached technical report and dashboard (2026-10-23)
+
+Scope changed:
+1. `backrooms/services/telemetry/analysis.py` (new) — SQL-to-Pandas pipeline with `events_per_day`, `error_rate_by_type`, and `page_load_latency_by_day`.
+2. `backrooms/services/telemetry/router.py` — `GET /telemetry/report`, UTC period resolution, 60-second result/default-window caches, and `503` database-failure handling.
+3. `backrooms/services/telemetry/models.py` — `ReportPeriod` and `TelemetryReportResponse`.
+4. `backrooms/services/telemetry/constants.py` — report cache TTL and default-window constants.
+5. `backrooms/services/pyproject.toml`, `uv.lock`, `requirements.txt` — added Pandas 3.1.0 with its NumPy/date dependencies. Developer approved this dependency change.
+6. `backrooms/services/telemetry/tests/test_analysis.py` (new) — metric happy/edge/failure coverage.
+7. `backrooms/services/Inventory-API/tests/test_telemetry_report.py` (new) — endpoint period, cache, and failure coverage.
+8. `backrooms/services/Inventory-API/tests/conftest.py` — clears the report/default-window caches per test.
+9. `uis/backoffice/lib/telemetry-report.ts` (new) — typed report contract and `fetchTelemetryReport()`.
+10. `uis/backoffice/app/telemetry/page.tsx` (new) — engineering dashboard with period picker, three metric tables, and loading/empty/error states.
+11. `uis/backoffice/lib/__tests__/telemetry-report.test.ts` (new) — report-fetch happy/edge/failure coverage.
+12. `uis/backoffice/components/backoffice/BackofficeShell.tsx` — added the Telemetry navigation entry.
+13. `docs/telemetry/telemetry-plan.md` — Sprint 3 period, cache, and metric-population contract.
+14. `docs/telemetry/sprint3-report.md` (new) — live-data report sample, cache evidence, technical-event evidence, and limitations.
+
+What changed:
+1. Added a pure Pandas analysis pipeline. Each metric filters `timestamp` and `event_type` in SQL, refines `tags`/types in Pandas, calls `pd.to_datetime(..., utc=True)` before grouping, and returns JSON-safe records. `error_rate_by_type` uses the full declared daily population as its denominator and stored `level='error'` as its numerator; warn-level business rejections are not counted as errors.
+2. Added `GET /telemetry/report` with optional ISO 8601 bounds, inclusive-start/exclusive-end UTC windows, a seven-day default, single-bound seven-day anchoring, `422` for malformed/reversed/empty ranges, and a typed `{ period, metrics }` response.
+3. Added a 60-second `TtlCache` keyed by the resolved `(start, end)` pair plus a 60-second cached resolved default window. Cache hits skip all pipeline calls; failures return `503` and are not cached.
+4. Added the `/telemetry` backoffice dashboard, reusing the existing inventory card/table styles, with date inputs, active period display, and per-metric tables.
+5. Generated a genuine technical event through the real backoffice: headless Chrome loaded `/login`, an uncaught `Error` was scheduled in the page, the existing telemetry error listener emitted `frontend_error_captured`, and `POST /telemetry/events` returned `200`. The row is stored at `level='error'` with a sanitised message. No telemetry row was fabricated.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 226 passed (2 pre-existing deprecation warnings).
+2. `npx jest --runInBand` from the repository root: 93 passed across 14 suites.
+3. `npm run lint` and `npm run build` in `uis/backoffice`: passed; `/telemetry` generated alongside the existing 16 routes.
+4. Live Supabase report: HTTP `200` with real business, navigation, error, and latency metrics. Final table count was 64 rows; `page_view` was 3 and `frontend_error_captured` was 1 (Oct 23 error share = 1/3).
+5. Live dashboard browser check: `/telemetry` rendered the real period and metric tables; the Inventory API log recorded `POST /telemetry/events` `200` and `GET /telemetry/report` `200`.
+6. `git diff --check`: repository LF-to-CRLF notices only.
+7. Protected paths: only the developer-approved `pyproject.toml`, `uv.lock`, and `requirements.txt` changed. No `.env`, `CONTEXT.md`, `infra/**`, `data/raw/**`, `internal/**`, or `mcps/**` edit was made.
+
+Remaining risks / notes:
+1. The report cache is process-local; multiple Uvicorn workers would each hold their own 60-second copy.
+2. `error_rate_by_type` is a captured-event error share, not a failed-request rate, and it excludes warn-level business rejections by design.
+3. The live page-load latency population is thin (three samples: `/inventory/products`, `/login`, `/telemetry`); the metric is honest but not yet a broad baseline.
+4. The optional `auth_failure_rate` metric remains unavailable because Sprint 1 deferred `login_succeeded` / `login_failed` capture. The optional dashboard was implemented.
+5. Pandas increases the backend image size; the Docker requirements export now includes Pandas, NumPy, `python-dateutil`, and `tzdata`.
+6. Duplicate telemetry rows remain possible by design; report metrics count stored rows, not unique `eventId` values.
+7. The Docker image was not rebuilt because the Docker daemon was unavailable in this session; `requirements.txt` was regenerated from the lockfile and includes Pandas/NumPy for the image build.
+
 # Telemetry Sprint 2 — validate individually and persist in Supabase (2026-10-21)
 
 Scope changed:

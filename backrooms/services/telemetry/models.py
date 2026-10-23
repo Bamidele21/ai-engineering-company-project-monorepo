@@ -70,3 +70,15 @@ class TelemetryResponse(BaseModel):
 	received: int
 	stored: int
 	rejected: int
+
+
+class ReportPeriod(BaseModel):
+	model_config = ConfigDict(populate_by_name=True)
+
+	start: str = Field(alias="from")
+	end: str = Field(alias="to")
+
+
+class TelemetryReportResponse(BaseModel):
+	period: ReportPeriod
+	metrics: dict[str, list[dict[str, Any]]]

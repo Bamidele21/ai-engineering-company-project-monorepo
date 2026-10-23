@@ -34,6 +34,7 @@ import models  # noqa: E402,F401  (register tables)
 import main as inventory_main  # noqa: E402
 from models import Programme  # noqa: E402
 from routers import inventory as inventory_routes  # noqa: E402
+from services.telemetry import router as telemetry_routes  # noqa: E402
 
 
 @pytest.fixture()
@@ -41,6 +42,8 @@ def clear_inventory_cache():
     """Drop module-level caches before each test."""
     inventory_routes._inventory_cache.clear()
     inventory_routes._telemetry_throttle.clear()
+    telemetry_routes._report_cache.clear()
+    telemetry_routes._default_period_cache.clear()
 
 
 @pytest.fixture()
