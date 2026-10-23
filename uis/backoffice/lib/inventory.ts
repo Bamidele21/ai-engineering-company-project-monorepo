@@ -7,14 +7,19 @@ export const INVENTORY_API_URL =
   process.env.NEXT_PUBLIC_INVENTORY_API_URL ?? "http://localhost:8001";
 
 export type AssetCategory =
-  | "hardware"
-  | "peripherals"
-  | "office_supplies"
-  | "training_materials";
+  | "training_kit"
+  | "certification"
+  | "onboarding_equipment";
 
 export type Office = "Valencia" | "Miami";
+export type Currency = "EUR" | "USD";
 
 export type ExitType = "allocation" | "consumption";
+
+export const CURRENCY_BY_OFFICE: Record<Office, Currency> = {
+  Valencia: "EUR",
+  Miami: "USD",
+};
 
 export interface Asset {
   id: number;
@@ -22,6 +27,8 @@ export interface Asset {
   sku: string;
   category: AssetCategory;
   office: Office;
+  programme_id: number | null;
+  min_stock: number;
   current_stock: number;
 }
 
@@ -36,6 +43,8 @@ export interface Order {
   created_at: string;
   user_uuid: string;
   supplier: string | null;
+  unit_cost: number | null;
+  currency: Currency | null;
   exit_type: ExitType | null;
   assigned_to: string | null;
 }
@@ -46,6 +55,8 @@ export interface InboundOrder {
   quantity: number;
   supplier: string;
   office: Office;
+  unit_cost: number;
+  currency: Currency;
   created_at: string;
   user_uuid: string;
 }
@@ -66,6 +77,8 @@ export interface InboundOrderPayload {
   quantity: number;
   supplier: string;
   office: Office;
+  unit_cost: number;
+  currency: Currency;
 }
 
 export interface OutboundOrderPayload {
@@ -76,18 +89,14 @@ export interface OutboundOrderPayload {
   office: Office;
 }
 
-// Stock-level thresholds for the products table. Nexova's operations team
-// wants an at-a-glance signal: 0 units is "out", fewer than 10 units is "low",
-// and 10 or more units is "healthy".
-const LOW_STOCK_THRESHOLD = 10;
+export const DEFAULT_MIN_STOCK = 10;
 
 export type StockLevel = "out" | "low" | "healthy";
 
 export const CATEGORY_LABELS: Record<AssetCategory, string> = {
-  hardware: "Hardware",
-  peripherals: "Peripherals",
-  office_supplies: "Office supplies",
-  training_materials: "Training materials",
+  training_kit: "Training kit",
+  certification: "Certification",
+  onboarding_equipment: "Onboarding equipment",
 };
 
 export const STOCK_LEVEL_LABELS: Record<StockLevel, string> = {
@@ -96,12 +105,15 @@ export const STOCK_LEVEL_LABELS: Record<StockLevel, string> = {
   healthy: "In stock",
 };
 
-export function stockLevel(stock: number): StockLevel {
+export function stockLevel(
+  stock: number,
+  minStock: number = DEFAULT_MIN_STOCK
+): StockLevel {
   if (stock <= 0) {
     return "out";
   }
 
-  if (stock < LOW_STOCK_THRESHOLD) {
+  if (stock < minStock) {
     return "low";
   }
 

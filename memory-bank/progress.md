@@ -1,5 +1,160 @@
 # Progress
 
+# Telemetry Sprint 3 — cached technical report and dashboard (2026-10-23)
+
+Scope changed:
+1. `backrooms/services/telemetry/analysis.py` (new) — SQL-to-Pandas pipeline with `events_per_day`, `error_rate_by_type`, and `page_load_latency_by_day`.
+2. `backrooms/services/telemetry/router.py` — `GET /telemetry/report`, UTC period resolution, 60-second result/default-window caches, and `503` database-failure handling.
+3. `backrooms/services/telemetry/models.py` — `ReportPeriod` and `TelemetryReportResponse`.
+4. `backrooms/services/telemetry/constants.py` — report cache TTL and default-window constants.
+5. `backrooms/services/pyproject.toml`, `uv.lock`, `requirements.txt` — added Pandas 3.1.0 with its NumPy/date dependencies. Developer approved this dependency change.
+6. `backrooms/services/telemetry/tests/test_analysis.py` (new) — metric happy/edge/failure coverage.
+7. `backrooms/services/Inventory-API/tests/test_telemetry_report.py` (new) — endpoint period, cache, and failure coverage.
+8. `backrooms/services/Inventory-API/tests/conftest.py` — clears the report/default-window caches per test.
+9. `uis/backoffice/lib/telemetry-report.ts` (new) — typed report contract and `fetchTelemetryReport()`.
+10. `uis/backoffice/app/telemetry/page.tsx` (new) — engineering dashboard with period picker, three metric tables, and loading/empty/error states.
+11. `uis/backoffice/lib/__tests__/telemetry-report.test.ts` (new) — report-fetch happy/edge/failure coverage.
+12. `uis/backoffice/components/backoffice/BackofficeShell.tsx` — added the Telemetry navigation entry.
+13. `docs/telemetry/telemetry-plan.md` — Sprint 3 period, cache, and metric-population contract.
+14. `docs/telemetry/sprint3-report.md` (new) — live-data report sample, cache evidence, technical-event evidence, and limitations.
+
+What changed:
+1. Added a pure Pandas analysis pipeline. Each metric filters `timestamp` and `event_type` in SQL, refines `tags`/types in Pandas, calls `pd.to_datetime(..., utc=True)` before grouping, and returns JSON-safe records. `error_rate_by_type` uses the full declared daily population as its denominator and stored `level='error'` as its numerator; warn-level business rejections are not counted as errors.
+2. Added `GET /telemetry/report` with optional ISO 8601 bounds, inclusive-start/exclusive-end UTC windows, a seven-day default, single-bound seven-day anchoring, `422` for malformed/reversed/empty ranges, and a typed `{ period, metrics }` response.
+3. Added a 60-second `TtlCache` keyed by the resolved `(start, end)` pair plus a 60-second cached resolved default window. Cache hits skip all pipeline calls; failures return `503` and are not cached.
+4. Added the `/telemetry` backoffice dashboard, reusing the existing inventory card/table styles, with date inputs, active period display, and per-metric tables.
+5. Generated a genuine technical event through the real backoffice: headless Chrome loaded `/login`, an uncaught `Error` was scheduled in the page, the existing telemetry error listener emitted `frontend_error_captured`, and `POST /telemetry/events` returned `200`. The row is stored at `level='error'` with a sanitised message. No telemetry row was fabricated.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 226 passed (2 pre-existing deprecation warnings).
+2. `npx jest --runInBand` from the repository root: 93 passed across 14 suites.
+3. `npm run lint` and `npm run build` in `uis/backoffice`: passed; `/telemetry` generated alongside the existing 16 routes.
+4. Live Supabase report: HTTP `200` with real business, navigation, error, and latency metrics. Final table count was 64 rows; `page_view` was 3 and `frontend_error_captured` was 1 (Oct 23 error share = 1/3).
+5. Live dashboard browser check: `/telemetry` rendered the real period and metric tables; the Inventory API log recorded `POST /telemetry/events` `200` and `GET /telemetry/report` `200`.
+6. `git diff --check`: repository LF-to-CRLF notices only.
+7. Protected paths: only the developer-approved `pyproject.toml`, `uv.lock`, and `requirements.txt` changed. No `.env`, `CONTEXT.md`, `infra/**`, `data/raw/**`, `internal/**`, or `mcps/**` edit was made.
+
+Remaining risks / notes:
+1. The report cache is process-local; multiple Uvicorn workers would each hold their own 60-second copy.
+2. `error_rate_by_type` is a captured-event error share, not a failed-request rate, and it excludes warn-level business rejections by design.
+3. The live page-load latency population is thin (three samples: `/inventory/products`, `/login`, `/telemetry`); the metric is honest but not yet a broad baseline.
+4. The optional `auth_failure_rate` metric remains unavailable because Sprint 1 deferred `login_succeeded` / `login_failed` capture. The optional dashboard was implemented.
+5. Pandas increases the backend image size; the Docker requirements export now includes Pandas, NumPy, `python-dateutil`, and `tzdata`.
+6. Duplicate telemetry rows remain possible by design; report metrics count stored rows, not unique `eventId` values.
+7. The Docker image was not rebuilt because the Docker daemon was unavailable in this session; `requirements.txt` was regenerated from the lockfile and includes Pandas/NumPy for the image build.
+
+# Telemetry Sprint 2 — validate individually and persist in Supabase (2026-10-21)
+
+Scope changed:
+1. `backrooms/services/Inventory-API/migrations/002_telemetry_events.sql` (new) — eight-column table, three indexes, RLS, and anon/authenticated revokes.
+2. `backrooms/services/telemetry/storage.py` (new) — telemetry table metadata, service/level/value/message mapping, sanitisation, reserved `_meta`, bulk insert, and dialect-aware table setup.
+3. `backrooms/services/telemetry/catalog.py` (new) — full 22-event catalogue, emitters, schema versions, required/allowlist parity, type/enum/min/max validation, and nullable exceptions.
+4. `backrooms/services/telemetry/models.py` — loose `TelemetryBatch.events` and `{received, stored, rejected}` response; `TelemetryEvent` unchanged.
+5. `backrooms/services/telemetry/router.py` — per-item model/catalogue validation, partial rejection, single bulk insert, 503 rollback path.
+6. `backrooms/services/telemetry/emitter.py` — now validates through the static catalogue.
+7. `backrooms/services/Inventory-API/database.py` — startup migration/table setup for Postgres and SQLite.
+8. Tests: `Inventory-API/tests/test_telemetry_endpoint.py` rewritten; `telemetry/tests/test_catalog.py` added; `telemetry/tests/test_emitter.py` updated.
+9. `docs/telemetry/telemetry-plan.md` — Sprint 2 storage mapping, `_meta`, sanitisation, duplicate semantics, indexes, access, and migration path.
+10. No `uis/backoffice` file changed in Sprint 2.
+
+What changed:
+1. Replaced the validating stub with a real endpoint that accepts a loose `{ "events": [...] }` envelope, validates each item with the unchanged `TelemetryEvent` plus the static catalogue, and persists valid siblings even when others are rejected.
+2. Added one bulk `INSERT` per valid batch in one transaction; all-invalid batches perform no database call; database failures roll back and return `503`.
+3. Added `telemetry_events` in the confirmed Supabase project with `id uuid default gen_random_uuid()`, `timestamptz`, `service`, `event_type`, `level`, nullable `numeric value`/`text message`, and `jsonb tags`; exactly the timestamp, event-type, and GIN-tags indexes.
+4. Mapped `web` to `backoffice`, preserved API services, mapped error/warn/info levels, stored documented numeric `value` fields, sanitised error messages, stripped query strings, and stored reserved envelope metadata under `tags._meta`.
+5. Enabled RLS and revoked `anon`/`authenticated`; the backend uses direct database credentials.
+6. Documented duplicate-delivery semantics: retries/Beacon can create duplicate rows, and no exactly-once guarantee or unique constraint is claimed.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 205 passed (2 pre-existing deprecation warnings).
+2. `npx jest --runInBand` from the repository root: 85 passed across 13 suites; backoffice lint and build passed.
+3. Live Supabase migration inspection: eight columns, three required indexes plus the primary-key index, `rls enabled = true`, and no `anon`/`authenticated` grants.
+4. Live mixed-batch smoke: `{"received":3,"stored":1,"rejected":2}` with the valid page view persisted.
+5. Live real-workflow data: 61 stored rows at the final check — 35 `inbound_order_created`, 19 `outbound_order_created`, 2 `outbound_order_rejected`, 3 `stock_threshold_triggered`, 1 `kit_cost_variance_detected` (97.53% variance), and 1 `page_view`. The controlled generation run produced the first 29; additional backoffice/API activity arrived during verification. All 61 rows have distinct `eventId` metadata values.
+6. `git diff --check`: repository LF→CRLF notices only.
+7. No protected path modified in Sprint 2. `.env`, `CONTEXT.md`, `infra/**`, `data/raw/**`, `internal/**`, `mcps/**`, and lockfiles were untouched.
+
+Remaining risks / notes:
+1. Duplicate telemetry rows are intentionally possible; `tags._meta.eventId` is available for a future dedupe policy.
+2. `tags._meta` is reserved storage metadata; Sprint 3 report extraction must ignore it.
+3. The Postgres migration is applied on Inventory API startup and is idempotent; SQLite tests use equivalent SQLAlchemy metadata. Production should still adopt Alembic before schema churn grows.
+4. `service_role` retains server-side grants on the table; browser/anon access is revoked and the frontend has no Supabase client.
+5. Legacy cost history/zero-cost rows can affect early variance interpretation; live variance evidence is 97.53% against the historical mean.
+
+# Telemetry Sprint 1 — capture and validate events (2026-10-21)
+
+Scope changed:
+1. `backrooms/services/telemetry/` (new) — `constants.py`, `models.py`, `router.py`, `emitter.py`, and `tests/test_emitter.py`.
+2. `backrooms/services/Inventory-API/main.py` — registers the telemetry router.
+3. `backrooms/services/Inventory-API/models.py`, `schemas.py`, `database.py`, `seed.py` — programmes, `min_stock`, inbound cost/currency, category migration, legacy-schema upgrade.
+4. `backrooms/services/Inventory-API/routers/inventory.py` — backend-canonical business events, threshold/variance checks, rejection hooks, direct-edit 405 stubs.
+5. `backrooms/services/Inventory-API/tests/` — `test_telemetry_endpoint.py`, `test_inventory_telemetry.py`, `test_migration.py`; updated `conftest.py`, `test_inventory.py`, `test_seed.py`.
+6. `uis/backoffice/lib/telemetry/` (new) — `constants.ts`, `catalog.ts`, `session.ts`, `sanitize.ts`, `telemetry.ts`, `page-view.ts`, `error-listeners.ts`, `validation.ts`.
+7. `uis/backoffice/components/telemetry/` (new) — `TelemetryBootstrap.tsx`, `PageViewTracker.tsx`.
+8. `uis/backoffice/app/layout.tsx`, `components/auth/AuthGuard.tsx`, `lib/auth/client.ts`, `lib/auth/session.ts`, `lib/inventory.ts`, inventory inbound/outbound/products pages — lifecycle mounting, correlation headers, session rotation, cost/currency UI, per-asset thresholds, client validation events.
+9. `uis/backoffice/lib/__tests__/` — five new telemetry suites plus updated `inventory.test.ts`.
+10. `docs/telemetry/telemetry-plan.md`, `event-schemas.json`, `sprint1-coverage.md` (new) — frozen Sprint 1 transport/session/ownership contract and coverage checklist.
+11. `.env.example`, `uis/backoffice/.env.example`, `Inventory-API/.env.example`, `docker-compose.yml` — telemetry endpoint configuration examples.
+12. `backrooms/services/pyproject.toml` — telemetry tests and coverage source.
+
+What changed:
+1. Implemented the agreed Sprint 1 decisions: Inventory API is the telemetry host; the backend is canonical for the five mandatory inventory events and `outbound_order_rejected`; the frontend emits only navigation, errors, network failures, and client validation; authentication events and Web Vitals are deferred.
+2. Added a reusable `TelemetryEvent` envelope, `POST /telemetry/events` validating stub (`{ "events": [...] }` → `{ "received": N }`, no persistence), and a process-local emitter with 20-event/10-second batching, exponential retries, and request/session correlation adoption.
+3. Added Nexova programmes, category migration, `min_stock`, inbound `unit_cost`/local `currency`, a legacy-schema upgrade path, and a refreshed seed (6 materials, 3 programmes, inbound/outbound history).
+4. Added the frontend `track()` service with in-memory session rotation, automatic envelope fields, allowlists/required keys, 10-second/20-event batching, `visibilitychange` Beacon flush with fallback, in-flight separation, and bounded retries.
+5. Instrumented central page views (query stripped), uncaught errors/rejections (sanitised and throttled), network failures (throttled), and inbound/outbound client validation. No business event is re-emitted by the browser.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 181 passed (2 pre-existing deprecation warnings).
+2. `npx jest --runInBand` from the repository root: 85 passed across 13 suites.
+3. `npm run lint` and `npm run build` in `uis/backoffice`: passed; all 16 routes generated.
+4. Telemetry schema validation: `event-schemas.json` parses, every draft-07 schema compiles, and all 22 hypothesis/decision strings remain consistent with `telemetry-plan.md`.
+5. `git diff --check`: only the repository's LF→CRLF notices; no whitespace errors.
+6. Developer-approved protected `.env` edits: corrected `NEXT_PUBLIC_TELEMETRY_ENDPOINT` in the root `.env` and the stale key in `Inventory-API/.env`; recreated the UI/API containers. `docker inspect` confirms the UI receives `http://localhost:8001/telemetry/events` and the Inventory API receives the same `TELEMETRY_ENDPOINT`.
+7. Live receiver smoke: `POST /telemetry/events` returned `{"received":1}` and the Inventory API logged `200 OK`.
+8. No other protected path modified. `CONTEXT.md`, `infra/**`, `data/raw/**`, `internal/**`, `mcps/**`, and lockfiles were untouched.
+
+Remaining risks / notes:
+1. Browser DevTools evidence (a 200 batch screenshot and representative payloads) still needs a manual run; the exact steps are recorded in `docs/telemetry/sprint1-coverage.md`.
+2. RESOLVED — the developer approved and corrected `TELEMETRY_ENDPOINT` / `NEXT_PUBLIC_TELEMETRY_ENDPOINT` in the protected root and Inventory-API `.env` files, and the containers were recreated. The live receiver smoke returned `{"received":1}`.
+3. The startup schema upgrade is an idempotent development bootstrap, not a migration framework. Adopt Alembic before this becomes production-critical.
+4. The backend emitter posts to `TELEMETRY_ENDPOINT` from a background thread; if the endpoint is this same Inventory API process, delivery is deferred or concurrent but not blocking the write path.
+5. Sprint 2 must replace the strict `TelemetryBatch` body with a loose outer envelope and per-event validation, and must add the telemetry table; the frontend contract and endpoint URL are intentionally stable.
+6. The frontend session is in memory by design, so a hard reload starts a new anonymous session and re-binds to the token. This matches the frozen contract but changes session ids across reloads.
+7. Legacy inbound rows are backfilled with `unit_cost = 0`; the first post-migration cost-variance calculation can be biased downward until real cost history accumulates. The migration is exercised on SQLite only, not against the live Supabase project.
+8. The telemetry receiver and emitter are process-local; multi-worker deployments would need a shared queue/sink rather than the current in-memory buffer.
+
+# Telemetry three-sprint delivery plan (2026-10-21)
+
+Scope changed:
+1. `telemetry-sprint-plan.md` (new, repository root) — sequenced capture, storage,
+   and technical-report sprints based on `telemetry1-context.md`,
+   `telemetry2-context.md`, and `telemetry3-context.md`.
+
+What changed:
+1. Added ordered work items, dependencies, acceptance criteria, validation cases,
+   evidence requirements, optional activities, and completion gates for each sprint.
+2. Mapped the plan to Nexova's existing briefing and schema catalogue, including
+   all five mandatory inventory events and the cross-cutting technical baseline.
+3. Recorded Sprint 1 decisions needed to reconcile transport cadence, business-event
+   ownership, session lifecycle, authentication schemas, and performance sampling.
+
+Validation performed:
+1. Reviewed coverage against all three context checklists and the existing telemetry
+   briefing/plan; confirmed the storage and reporting handoff requirements are scheduled.
+2. `git diff --no-index --check -- NUL telemetry-sprint-plan.md` passed after removing
+   Markdown hard-break trailing spaces (only the repository's LF-to-CRLF notice remains).
+3. Documentation-only exemption under `.agents/rules/test-coverage.md` exception #1:
+   no functional behavior changed, so application tests were not required.
+4. No protected paths modified; the three existing untracked source contexts were preserved.
+
+Remaining risks / notes:
+1. Implementation is future work. Sprint 1 contract decisions and inventory enabling
+   changes must be completed before capture can satisfy every mandatory event.
+2. Two-week sprint lengths are planning assumptions, not confirmed team commitments.
+3. `projectbrief.md` remains stale; `techContext.md` also incorrectly calls the now-populated
+   root `CONTEXT.md` a placeholder. Current source documents guided this plan.
+
 # parseApiError de-duplication (2026-10-18)
 
 Scope changed:

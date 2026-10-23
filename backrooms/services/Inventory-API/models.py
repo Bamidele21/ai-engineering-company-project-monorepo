@@ -19,6 +19,14 @@ def _utcnow() -> datetime:
 	return datetime.now(timezone.utc)
 
 
+class Programme(SQLModel, table=True):
+	__tablename__ = "programmes"
+
+	id: int | None = Field(default=None, primary_key=True)
+	slug: str = Field(unique=True, index=True)
+	name: str
+
+
 class Asset(SQLModel, table=True):
 	__tablename__ = "assets"
 
@@ -27,6 +35,10 @@ class Asset(SQLModel, table=True):
 	sku: str = Field(unique=True, index=True)
 	category: str
 	office: str
+	programme_id: int | None = Field(
+		default=None, foreign_key="programmes.id", index=True
+	)
+	min_stock: int = Field(default=10, ge=0)
 
 
 class AssetEntry(SQLModel, table=True):
@@ -37,6 +49,8 @@ class AssetEntry(SQLModel, table=True):
 	quantity: int
 	supplier: str
 	office: str
+	unit_cost: float = Field(default=0.0, ge=0)
+	currency: str = Field(default="EUR")
 	created_at: datetime = Field(default_factory=_utcnow)
 	user_uuid: str = Field(index=True)
 

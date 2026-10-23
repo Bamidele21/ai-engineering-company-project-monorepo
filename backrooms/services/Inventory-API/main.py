@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import init_inventory_schema
 from routers.inventory import router as inventory_router
 from schemas import HealthResponse
+from services.telemetry.router import router as telemetry_router
 
 
 @asynccontextmanager
@@ -57,6 +58,7 @@ app.add_middleware(
 )
 
 app.include_router(inventory_router)
+app.include_router(telemetry_router)
 
 
 @app.get("/", response_model=HealthResponse)

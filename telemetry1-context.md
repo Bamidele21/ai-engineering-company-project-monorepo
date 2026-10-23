@@ -1,0 +1,89 @@
+
+---
+
+
+The telemetry plan is approved. Today you implement the half the user never sees but that makes everything possible: the capture system in the frontend.
+
+Every event in your catalogue — mandatory or identified by you — must be captured at the exact moment it occurs in the backoffice, accumulated in a local queue, and sent to the backend in batches — never one by one. To verify that events are arriving correctly, you will also create a minimal receiver endpoint in FastAPI: it does not persist anything yet, it only validates the format and responds 200. Real database persistence is the work of Phase 3.
+
+> Your tech lead sent you this message:
+>
+> "I want to see events flowing before we build the storage layer. Create the `TelemetryService` in the backoffice and instrument, at a minimum, every mandatory metric from your BRIEFING — plus as much of the rest of your catalogue as you can get to today, prioritising coverage across different categories (technical and business) over depth in a single one.
+>
+> So you can verify the payload is arriving correctly, add a stub endpoint in the backend — validate the format and return 200, without writing to the database yet.
+>
+> One important thing: configure the endpoint URL as an environment variable from the start. In the next phase we will replace the stub with the real implementation and the frontend should not need to change anything.
+>
+> I don't want tracking scattered across every component. Everything goes through a single `track()` function — nothing else."
+
+
+
+### Phase 1 — Stub Endpoint in FastAPI
+
+> ⚠️ This endpoint is **temporary and for verification purposes**. Its only purpose is to let you check that the payload arrives with the correct format. In Phase 3 (next project) you will replace it with the real implementation including full validation and persistence in Supabase.
+
+- [ ] Create the `POST /telemetry/events` endpoint in the backend, in its own router inside `services/`. For now it should:
+  - Accept a body with the shape `{ "events": [...] }`
+  - Log the number of events received and the `event_type` of each one
+  - Return `200 OK` with `{ "received": N }` where N is the number of events in the batch
+- [ ] Define the Pydantic model `TelemetryEvent` with the standard envelope fields from your plan (`eventId`, `timestamp`, `sessionId`, `userId`, `event_type`, `schemaVersion`, `requestId`, `properties`). This model will be reused as-is in Phase 3 — define it properly from the start.
+- [ ] Read the endpoint URL from the `TELEMETRY_ENDPOINT` environment variable in the backend, even if you are not using it to redirect traffic yet. Establish the pattern from the beginning.
+
+### Phase 2 — TelemetryService in the Frontend
+
+- [ ] Create `uis/backoffice/src/services/telemetry.ts` (or equivalent) with the following responsibilities:
+  - **Local queue:** accumulate events in memory as an internal array
+  - **Batch + debounce:** send the queue to `NEXT_PUBLIC_TELEMETRY_ENDPOINT` every 10 seconds or when the queue reaches 20 events, whichever comes first
+  - **Reliable flush:** use `navigator.sendBeacon` on the `visibilitychange` event to guarantee pending events are sent when the tab is closed or hidden
+  - **Retry with backoff:** if sending fails, retry up to 3 times with exponential wait before discarding the batch
+- [ ] The service must automatically add to each event: `eventId` (UUID generated at capture time), `sessionId` (generated at login and stored in session memory), `userId` (from the authenticated session), `timestamp` in ISO 8601 at the moment of capture, `schemaVersion` from a shared constant, and `requestId` for correlation. Components calling `track()` must not pass these fields manually.
+- [ ] Expose a single public function `track(eventType: string, properties: Record<string, unknown>): void`. The `eventType` argument becomes the envelope field `event_type`. All backoffice tracking goes through this function — never through direct `fetch` or `axios`.
+
+### Phase 3 — Broad Instrumentation: Technical and Business
+
+- [ ] Instrument, without exception, **every mandatory metric** from your `company-BRIEFING.md` (through your approved plan).
+- [ ] Instrument a **cross-cutting technical baseline**, one that applies to any part of the application and not just the inventory module:
+  - Uncaught frontend errors (`window.onerror`, `unhandledrejection`, or Error Boundaries)
+  - At least one performance metric (page load time or the latency of a relevant API call)
+  - Page view / navigation tracking on at least the main sections of the backoffice
+- [ ] Instrument the rest of the business events from your plan that you prioritised (inventory or other flows in your company), respecting the property allowlist defined for each event in your `event-schemas.json`. Do not add extra properties "just in case".
+- [ ] Verify in the browser DevTools (Network tab) that batches are reaching the stub endpoint with the correct format and that the backend responds 200.
+
+⚠️ **IMPORTANT:** `event_type` values and `properties` keys must match your approved Phase 1 schemas, which were grounded in `company-BRIEFING.md`. Copying generic event names from this README instead of your plan will not be accepted.
+
+### 🔵 Additional Activity — Performance and Web Vitals
+
+- [ ] Instrument Web Vitals (`reportWebVitals` in Next.js or equivalent) and send them as telemetry events, adding the route or page as part of `properties`.
+- [ ] If you instrumented authentication events in your plan (failed login, session expired), capture them in the authentication hooks or components — not in each page individually. The failed login event must include in `properties` the reason for the failure (`invalid_credentials`, `session_expired`, `network_error`) but **never** the value entered by the user as password or email.
+
+---
+
+## ✅ What We Will Evaluate
+
+- [ ] The stub `POST /telemetry/events` endpoint exists, accepts arrays with the `TelemetryEvent` model, and returns `{ "received": N }`
+- [ ] The Pydantic model `TelemetryEvent` reflects the standard envelope from the Phase 1 plan with all its fields
+- [ ] The endpoint URL is read from `NEXT_PUBLIC_TELEMETRY_ENDPOINT` — it is not hardcoded
+- [ ] The backend declares `TELEMETRY_ENDPOINT` in its environment configuration to establish the pattern from the start
+- [ ] The `TelemetryService` implements local queue, batch+debounce (10s / 20 events), flush with `sendBeacon`, and retry with backoff
+- [ ] The service generates `eventId`, `sessionId`, `userId`, `timestamp`, `schemaVersion`, and `requestId` automatically — the component calling `track()` does not pass them manually
+- [ ] There are no direct `fetch`/`axios` calls for telemetry outside the `TelemetryService`
+- [ ] Every mandatory metric from the BRIEFING is instrumented
+- [ ] The cross-cutting technical baseline (errors, performance, navigation) is instrumented, not just the inventory flow
+- [ ] Instrumented events use `event_type` and property allowlists from the student's Phase 1 plan, grounded in `company-BRIEFING.md` — not generic placeholders from this README
+- [ ] There is no PII (email, name, password) in any event sent
+- [ ] The DevTools Network tab shows batches arriving at the endpoint with the correct format and a 200 response
+
+---
+
+## 📦 How to Submit
+
+1. Make sure the changes are in your fork: stub endpoint in `services/` and `TelemetryService` + instrumentation in `uis/backoffice/`.
+2. Create a Pull Request against the main branch of the monorepo with the title: `feat: telemetry event capture`.
+3. In the PR description, include:
+   - The list of instrumented events, marking which are mandatory and which you identified yourself, and which component or hook captures each one
+   - A DevTools screenshot showing a batch of events arriving at the stub with a 200 response
+   - Whether you implemented the additional activity (Web Vitals / authentication)
+
+---
+
+This and many other projects are built by students as part of the [Coding Bootcamps](https://4geeksacademy.com/) at 4Geeks Academy. By [@marcogonzalo](https://github.com/marcogonzalo) and [other contributors](https://github.com/4GeeksAcademy/ai-engineering-company-project-monorepo/graphs/contributors). Find out more about [Full-Stack Software Developer](https://4geeksacademy.com/en/career-programs/full-stack), [Data Science & Machine Learning](https://4geeksacademy.com/en/career-programs/data-science-ml), [Cybersecurity](https://4geeksacademy.com/en/career-programs/cybersecurity) and [AI Engineering](https://4geeksacademy.com/en/career-programs/ai-engineering).

@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
 
 # ``backrooms`` is the directory that makes ``services.Supply_directory_API.*``
@@ -57,8 +58,130 @@ def get_sql_session():
 		yield session
 
 
-def init_inventory_schema() -> None:
-	"""Create the inventory tables on startup from the registered ORM models."""
-	import models  # noqa: F401  (import registers tables on SQLModel.metadata)
+DEFAULT_PROGRAMMES = (
+	("b2b-sales", "B2B Sales Certification"),
+	("basic-leadership", "Basic Leadership"),
+	("new-hire-onboarding", "New Hire Onboarding"),
+)
 
-	SQLModel.metadata.create_all(engine)
+PROGRAMME_BY_CATEGORY = {
+	"onboarding_equipment": "new-hire-onboarding",
+	"training_kit": "basic-leadership",
+	"certification": "b2b-sales",
+}
+
+
+def _columns(connection, table_name: str) -> set[str]:
+	inspector = inspect(connection)
+	return {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _ensure_default_programmes(connection) -> None:
+	for slug, name in DEFAULT_PROGRAMMES:
+		exists = connection.execute(
+			text("SELECT id FROM programmes WHERE slug = :slug"), {"slug": slug}
+		).first()
+		if exists is None:
+			connection.execute(
+				text("INSERT INTO programmes (slug, name) VALUES (:slug, :name)"),
+				{"slug": slug, "name": name},
+			)
+
+
+def upgrade_inventory_schema(target_engine) -> None:
+	"""Bring a pre-telemetry inventory schema up to the Sprint 1 contract.
+
+	``SQLModel.metadata.create_all`` creates missing tables but never alters
+	existing columns, so the legacy Supabase tables need explicit, idempotent
+	upgrades. Production should replace this bootstrap with Alembic.
+	"""
+	import models  # noqa: F401  (register tables on SQLModel.metadata)
+
+	SQLModel.metadata.create_all(target_engine)
+
+	with target_engine.begin() as connection:
+		asset_columns = _columns(connection, "assets")
+		entry_columns = _columns(connection, "asset_entries")
+		legacy_programme_link = "programme_id" not in asset_columns
+		legacy_currency = "currency" not in entry_columns
+
+		if "min_stock" not in asset_columns:
+			connection.execute(
+				text(
+					"ALTER TABLE assets ADD COLUMN min_stock INTEGER NOT NULL DEFAULT 10"
+				)
+			)
+		if legacy_programme_link:
+			connection.execute(
+				text(
+					"ALTER TABLE assets ADD COLUMN programme_id INTEGER "
+					"REFERENCES programmes(id)"
+				)
+			)
+		if "unit_cost" not in entry_columns:
+			connection.execute(
+				text(
+					"ALTER TABLE asset_entries ADD COLUMN unit_cost FLOAT "
+					"NOT NULL DEFAULT 0"
+				)
+			)
+		if "currency" not in entry_columns:
+			connection.execute(
+				text(
+					"ALTER TABLE asset_entries ADD COLUMN currency VARCHAR(3) "
+					"NOT NULL DEFAULT 'EUR'"
+				)
+			)
+
+		connection.execute(
+			text(
+				"UPDATE assets SET category = 'onboarding_equipment' "
+				"WHERE category IN ('hardware', 'peripherals', 'office_supplies')"
+			)
+		)
+		connection.execute(
+			text(
+				"UPDATE assets SET category = 'training_kit' "
+				"WHERE category = 'training_materials'"
+			)
+		)
+		connection.execute(
+			text("UPDATE assets SET min_stock = 10 WHERE min_stock IS NULL")
+		)
+
+		if legacy_programme_link:
+			_ensure_default_programmes(connection)
+			for category, slug in PROGRAMME_BY_CATEGORY.items():
+				connection.execute(
+					text(
+						"UPDATE assets SET programme_id = "
+						"(SELECT id FROM programmes WHERE slug = :slug) "
+						"WHERE programme_id IS NULL AND category = :category"
+					),
+					{"slug": slug, "category": category},
+				)
+			connection.execute(
+				text(
+					"UPDATE assets SET programme_id = "
+					"(SELECT id FROM programmes WHERE slug = 'new-hire-onboarding') "
+					"WHERE programme_id IS NULL"
+				)
+			)
+
+		currency_filter = "" if legacy_currency else "WHERE currency IS NULL OR currency = ''"
+		connection.execute(
+			text(
+				"UPDATE asset_entries SET currency = CASE "
+				"WHEN lower(office) = 'miami' THEN 'USD' ELSE 'EUR' END "
+				f"{currency_filter}"
+			)
+		)
+
+
+def init_inventory_schema() -> None:
+	"""Create or upgrade the inventory and telemetry schemas on startup."""
+	upgrade_inventory_schema(engine)
+
+	from services.telemetry.storage import ensure_telemetry_table
+
+	ensure_telemetry_table(engine)
