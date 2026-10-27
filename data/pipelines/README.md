@@ -84,3 +84,13 @@ The KPI endpoint returns no cache; the latest-run endpoint reads the database so
 - The reporting schema enables RLS and revokes `anon`/`authenticated`; the browser uses the API.
 - The advisory lock needs a session-mode connection. The transaction pooler URL is converted from port 6543 to 5432; if unavailable, the flow falls back to the active-run unique index and Prefect concurrency limit.
 - `total_material_cost` is decimal money in the local office currency. EUR and USD are never summed together.
+
+### Sprint 2 additions
+
+- The main flow coordinates the `extract`, `transform`, `load`, and optional
+  `publish` subflows; the transform subflow runs the four domain KPI tasks.
+- `--resume-from <run-id>` skips committed weeks and recomputes the failed one.
+- `--health-check` runs the freshness/silence/baseline checks independently of
+  the ETL; alert delivery uses the optional `alert_weekly_performance_flow`.
+- The operating runbook lives in [RUNBOOK.md](./RUNBOOK.md).
+- The business dashboard is served by `uis/backoffice` at `/reporting`.

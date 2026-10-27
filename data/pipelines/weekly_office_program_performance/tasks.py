@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 from prefect import task
 from prefect.context import TaskRunContext
 from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
 
+from data.process.weekly_performance import kpi as pure_kpi
 from data.process.weekly_performance.errors import PipelineError
-from data.process.weekly_performance.transform import transform_week
+from data.process.weekly_performance.transform import validate_and_dedupe
 
 from . import config, db, extract, load, run_log
 
@@ -80,15 +81,47 @@ def transform_weekly_performance(
     known_programmes: list[str],
     week_start: str,
 ) -> dict[str, Any]:
-    """Deduplicate, validate, aggregate, zero-fill, and reconcile one week."""
-    result = transform_week(
+    """Validation/normalization boundary for one week.
+
+    Refined responsibility after the Sprint 2 subflow refactor: this task
+    deduplicates, normalizes, and validates the source rows and returns the
+    reusable validated input. The transform subflow then feeds the validated
+    events to the four domain KPI tasks and assembles the destination rows.
+    The dimension scaffold and known programmes stay in the cache key because
+    they are material to the published result. This task never invokes other
+    Prefect tasks.
+    """
+    validated = validate_and_dedupe(
         raw_rows,
         week_start=date.fromisoformat(week_start),
-        dimension_pairs=[tuple(pair) for pair in dimension_pairs],
-        known_programmes=known_programmes,
-        rejection_threshold=config.rejection_threshold(),
     )
-    return result.to_dict()
+    return validated.to_dict()
+
+
+@task(name="compute_total_material_cost", log_prints=True)
+def compute_total_material_cost(
+    events: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Sum ``quantity * unit_cost`` per pair for inbound events only."""
+    return pure_kpi.compute_total_material_cost(events)
+
+
+@task(name="count_kits_delivered", log_prints=True)
+def count_kits_delivered(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Count outbound delivery events, never quantities."""
+    return pure_kpi.count_kits_delivered(events)
+
+
+@task(name="count_shortage_events", log_prints=True)
+def count_shortage_events(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Count captured stock-threshold events."""
+    return pure_kpi.count_shortage_events(events)
+
+
+@task(name="count_cost_variance_events", log_prints=True)
+def count_cost_variance_events(events: list[dict[str, Any]]) -> dict[str, int]:
+    """Count captured cost-variance alerts."""
+    return pure_kpi.count_cost_variance_events(events)
 
 
 @task(
@@ -122,7 +155,9 @@ def _parse_create_fields(create: dict[str, Any]) -> dict[str, Any]:
     ]
     for key in ("source_window_start", "source_window_end"):
         value = create[key]
-        parsed[key] = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+        parsed[key] = (
+            value if isinstance(value, datetime) else datetime.fromisoformat(value)
+        )
     return parsed
 
 

@@ -1,5 +1,72 @@
 # Progress
 
+# Container fix — backend image carries data/ and the worker venv survives (2026-10-27)
+
+Scope changed:
+1. `backrooms/services/Dockerfile` — now copies `data/` into the backend image; the Compose build context for both backend services moved to the repository root.
+2. `docker-compose.yml` — removed the `./data` bind mount from `prefect-worker` (it shadowed the image's Linux virtualenv with the Windows host copy and broke the `prefect` binary on PATH).
+3. `.dockerignore` — now excludes `.env` files, the TinyDB auth store, caches, and build artifacts so no secrets reach any image.
+
+What changed:
+1. The backend image is now self-sufficient for the reporting module's `data.pipelines` import; standalone `docker run` works without the Compose mount.
+2. The worker container runs the image's own Linux virtualenv for Prefect.
+
+Validation performed:
+1. Built both images with the Docker daemon running (`nexova-backend-test`, `nexova-worker-test`).
+2. Inside the backend image: `from services.reporting.service import get_report, get_latest_run, trigger_run` succeeds; Inventory API main import succeeds with a dummy `DATABASE_URL`; all three `/reporting` paths appear in OpenAPI; `find` confirms no `.env`, `suppliers_db.json`, or `password_resets_db.json` in the image.
+3. Inside the worker image: the exact `from data.pipelines.weekly_office_program_performance import queries, status, triggers` import succeeds; CLI help renders; a full ETL run against the live database completed (5 rows, subflows, unchanged recompute).
+4. `docker compose build` built all five images; `up -d` started the stack; suppliers-api (8000), inventory-api (8001), and prefect-server (4200) return 200; the worker registered `nexova-data-pipelines` and the deployment; the UI serves on 3000/3001.
+5. Through the stack: authenticated KPI read 200 with 5 entries, regular-user trigger 403, and a deployment run (`c55faad7-5f60-4b8e-859c-a8bc48948fa4`) executed by the container worker (58 extracted, 5 loaded, error null).
+6. `docker compose config -q` passed. The stack was left running at the end of the session.
+
+Remaining risks / notes:
+1. A stale `next start` process from the browser check held port 3000; it was stopped before starting the UI container.
+2. The UI container serves both apps on 3000 (website) and 3001 (backoffice) per `uis/start.sh`.
+
+# Sprint 2 — subflows, isolated KPI tests, and business dashboard (2026-10-27)
+
+Scope changed:
+1. `data/pipelines/weekly_office_program_performance/subflows.py` (new) — the three critical subflows plus the optional snapshot subflow.
+2. `data/pipelines/weekly_office_program_performance/flow.py` — the main flow now coordinates the subflows; added `resume_from`, late-event supersession (fingerprint comparison, `recomputed_weeks`, `supersedes_run_id`), and the non-critical alert subflow.
+3. `data/pipelines/weekly_office_program_performance/tasks.py` — `transform_weekly_performance` is now the cached validation/normalization boundary; four domain KPI tasks added (`compute_total_material_cost`, `count_kits_delivered`, `count_shortage_events`, `count_cost_variance_events`).
+4. `data/process/weekly_performance/kpi.py` (new) — pure per-KPI functions with explicit malformed-input rejection; `transform.py` now exposes `validate_and_dedupe`; `aggregate.py` now exposes `assemble_week`.
+5. `data/pipelines/weekly_office_program_performance/monitoring.py` (new) — freshness/silence/baseline health checks, the health flow, and the optional alert subflow.
+6. `data/pipelines/weekly_office_program_performance/run_log.py` — `previous_publication`, `plan_resume`, `decode_target_weeks`, `supersedes_run_id` support, and a `finalize_run` default-fields fix.
+7. `data/pipelines/weekly_office_program_performance/extract.py` — dialect-aware source SQL (Postgres `public.` prefix, SQLite default schema) and UTC timestamp normalization for SQLite values.
+8. `data/pipelines/pipeline.py` — `--resume-from` and `--health-check` flags.
+9. `tests/pipelines/test_pipeline.py` (rewritten) — 22 isolated tests calling the KPI task `.fn` implementations, including the four required hand-calculated cases and defensive/edge coverage.
+10. `data/pipelines/weekly_office_program_performance/tests/` — SQLite flow suite (`test_subflows.py` 13 tests, `test_monitoring.py` 9 tests, `test_prefect_behavior.py` updated) plus two new PostgreSQL tests (late-event replacement, multi-week resume).
+11. `uis/backoffice/lib/reporting.ts`, `lib/__tests__/reporting.test.ts`, `app/reporting/page.tsx` (new) — typed client, malformed-response validation, week helpers, currency formatting, and the four-table dashboard; `BackofficeShell.tsx` gained the Reporting navigation entry.
+12. `data/pipelines/RUNBOOK.md` (new), `data/pipelines/PIPELINE_DESIGN.md` sections 22.5/22.6, `data/pipelines/README.md`, env examples — subflow topology, monitoring rationale (questions 16.4/16.7/16.10), and operating instructions.
+13. `data/eval/weekly_performance/sprint2-report.md`, `sprint2-dashboard.png` (new) — sanitized evidence.
+
+What changed:
+1. The main flow invokes `extract_weekly_office_program_telemetry_flow`, `transform_weekly_office_program_performance_flow`, `load_weekly_office_program_performance_flow`, and optional `publish_weekly_performance_snapshot_flow` (with `return_state=True`), preserving retries, the one-hour cache, locks, audit identity, atomic loads, and the CLI.
+2. The transform subflow runs the four KPI tasks over the cached validated input and then assembles, zero-fills, and reconciles.
+3. Resume skips committed weeks and recomputes the failed one; late events record `recomputed_weeks` and `supersedes_run_id`; unchanged recomputes supersede nothing; fingerprints cover all KPI values, dimensions, and event identities.
+4. The health flow detects missed runs (8 days), failed runs, stale heartbeats, rejection/reconciliation warnings, unexpected and one-sided office silence, and labels insufficient baselines; alert delivery is a non-critical subflow.
+5. The `/reporting` dashboard renders the four exact KPI tables, the returned UTC week, a 12-week completed-Monday selector, per-row EUR/USD money without cross-currency totals, and explicit loading/error/no-report/zero-activity states with a stale-response guard.
+
+Validation performed:
+1. `python -m pytest tests/pipelines/test_pipeline.py` under the worker environment: 22 passed.
+2. `uv run pytest -q` from `data/pipelines`: 24 passed, 6 skipped (PostgreSQL marker) in 1:44.
+3. Disposable PostgreSQL 17 integration suite: 8 passed.
+4. `uv run pytest -q` from `backrooms/services`: 238 passed (2 pre-existing deprecation warnings).
+5. `npx jest --runInBand` from the repo root: 117 passed across 15 suites (24 new reporting tests).
+6. `npm run lint` and `npm run build` in `uis/backoffice`: passed; `/reporting` generated (stale `.next/dev/types` cache cleared before the successful build).
+7. Live CLI `python data/pipelines/pipeline.py`: subflow topology executed for both target weeks; run `e9147269-0563-4e20-96ab-4f2c50c4c848` loaded 8 rows, `recomputed_weeks` empty, no supersession.
+8. Live `--health-check`: 1 reconciliation warning alert, `baseline_status=available`, `prior_completed_runs=4`.
+9. Live trigger: `POST /reporting/pipeline-runs` 202; worker adopted run `23a2b005-f06c-4b32-a98b-06710104b260` (`flow_run_id=0807a191-13de-418d-bfb6-0dbbd6cebd4a`), 58 extracted, 5 loaded; authenticated KPI read 200.
+10. Headless Chrome (CDP) rendered real KPI values for 2026-10-19, the zero week 2026-10-12 with the computed-zero card, the 404 week 2026-10-05 with the required wording, and restored 2026-10-19 after reselection; screenshot saved to `data/eval/weekly_performance/sprint2-dashboard.png`.
+11. `git diff --check` passed (LF-to-CRLF notices only); no protected path modified; source telemetry unchanged.
+
+Remaining risks / notes:
+1. Docker Desktop's daemon was unavailable, so image builds and container runtime checks were not executed; Compose config validates and the local server/worker replicated the topology.
+2. No wall-clock scheduler tick was awaited; the manual API trigger exercised the same worker/deployment path.
+3. Live late-event/resume demonstrations ran on the SQLite flow suite and the disposable PostgreSQL cluster rather than production rows.
+4. `REPORTING_ALERTS_WEBHOOK` was unset during validation, so live alert delivery returned `skipped:no_webhook`; the delivery path is unit-covered.
+5. `memory-bank/projectbrief.md` remains stale (pre-existing).
+
 # Sprint 1 — resilient weekly performance pipeline and reporting API (2026-10-27)
 
 Scope changed:

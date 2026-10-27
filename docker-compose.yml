@@ -34,7 +34,10 @@ services:
 
   suppliers-api:
     build:
-      context: ./backrooms/services
+      # The image needs both backrooms/services and data/ (the reporting module
+      # imports data.pipelines), so the context is the repository root.
+      context: .
+      dockerfile: backrooms/services/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -48,7 +51,8 @@ services:
 
   inventory-api:
     build:
-      context: ./backrooms/services
+      context: .
+      dockerfile: backrooms/services/Dockerfile
     ports:
       - "8001:8001"
     env_file:
@@ -95,7 +99,9 @@ services:
       PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
       PREFECT_LOCAL_STORAGE_PATH: /app/.prefect-results
     volumes:
-      - ./data:/app/data
+      # Deliberately no ./data bind mount: the image carries its own Linux
+      # virtualenv under /app/data/pipelines/.venv, and a host bind mount would
+      # shadow it with the Windows host copy (Scripts/ instead of bin/).
       - prefect-results:/app/.prefect-results
     depends_on:
       - prefect-server

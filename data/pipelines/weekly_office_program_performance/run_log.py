@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -12,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.engine import Engine
 
 from data.process.weekly_performance.constants import PIPELINE_NAME
-from data.process.weekly_performance.errors import ActiveRunExistsError
+from data.process.weekly_performance.errors import ActiveRunExistsError, NoRunFoundError
 
 from .schema import pipeline_runs
 
@@ -128,6 +129,7 @@ def create_or_adopt_run(
     source_window_start: datetime,
     source_window_end: datetime,
     pipeline_name: str = PIPELINE_NAME,
+    supersedes_run_id: str | uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Create a run row, or adopt the queued row created by the API."""
     now = datetime.now(timezone.utc)
@@ -171,6 +173,11 @@ def create_or_adopt_run(
                         heartbeat_at=now,
                         checkpoint_stage="extract",
                         created_at=now,
+                        supersedes_run_id=(
+                            _as_uuid(supersedes_run_id)
+                            if supersedes_run_id
+                            else None
+                        ),
                     )
                 )
             except IntegrityError as error:
@@ -197,6 +204,8 @@ def update_run(engine: Engine, run_id: str | uuid.UUID, **fields: Any) -> None:
         raise ValueError(f"Unsupported run-log fields: {sorted(invalid)}")
     if not fields:
         return
+    if fields.get("supersedes_run_id") is not None:
+        fields["supersedes_run_id"] = _as_uuid(fields["supersedes_run_id"])
     with engine.begin() as connection:
         connection.execute(
             update(pipeline_runs)
@@ -216,12 +225,12 @@ def finalize_run(
     status: str,
     **fields: Any,
 ) -> None:
+    fields.setdefault("finished_at", datetime.now(timezone.utc))
+    fields.setdefault("heartbeat_at", datetime.now(timezone.utc))
     update_run(
         engine,
         run_id,
         status=status,
-        finished_at=datetime.now(timezone.utc),
-        heartbeat_at=datetime.now(timezone.utc),
         **fields,
     )
 
@@ -237,3 +246,107 @@ def latest_run(
             .limit(1)
         ).mappings().first()
     return dict(row) if row else None
+
+
+def decode_json(value: Any, default: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return default
+    return value if value is not None else default
+
+
+def decode_target_weeks(row: dict[str, Any]) -> list[date]:
+    raw = decode_json(row.get("target_weeks"), [])
+    weeks: list[date] = []
+    for value in raw if isinstance(raw, list) else []:
+        if isinstance(value, str):
+            try:
+                weeks.append(date.fromisoformat(value))
+            except ValueError:
+                continue
+        elif isinstance(value, date):
+            weeks.append(value)
+    return sorted(weeks)
+
+
+def previous_publication(
+    engine: Engine,
+    week_start: date,
+    *,
+    exclude_run_id: str | uuid.UUID | None = None,
+    pipeline_name: str = PIPELINE_NAME,
+) -> tuple[str, str] | None:
+    """Return the latest completed run that published ``week_start``.
+
+    Returns ``(run_id, week_fingerprint)`` or ``None``. The fingerprint comes
+    from that run's own reconciliation payload, so recomputing a week can detect
+    a changed publication and record the supersession.
+    """
+    excluded = str(exclude_run_id) if exclude_run_id else None
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(pipeline_runs)
+            .where(
+                pipeline_runs.c.pipeline_name == pipeline_name,
+                pipeline_runs.c.status.in_(
+                    ("completed", "completed_with_warnings")
+                ),
+            )
+            .order_by(pipeline_runs.c.created_at.desc())
+            .limit(100)
+        ).mappings().all()
+
+    target = week_start.isoformat()
+    target_date = date.fromisoformat(target)
+    for row in rows:
+        run_uuid = str(row["run_id"])
+        if excluded and run_uuid == excluded:
+            continue
+        if target_date not in decode_target_weeks(dict(row)):
+            continue
+        reconciliation = decode_json(row.get("reconciliation"), {})
+        weeks = reconciliation.get("weeks") if isinstance(reconciliation, dict) else {}
+        fingerprint = (
+            weeks.get(target, {}).get("week_fingerprint")
+            if isinstance(weeks, dict)
+            else None
+        )
+        if fingerprint:
+            return run_uuid, str(fingerprint)
+    return None
+
+
+def plan_resume(
+    engine: Engine,
+    resume_run_id: str | uuid.UUID,
+    *,
+    pipeline_name: str = PIPELINE_NAME,
+) -> dict[str, Any]:
+    """Plan a resume of a failed run.
+
+    Returns the remaining uncommitted weeks (the failed week onwards) together
+    with the superseded run identity. Completed weeks are skipped because their
+    transactions already committed; the failed week is recomputed in full.
+    """
+    run = get_run(engine, resume_run_id)
+    if run is None:
+        raise NoRunFoundError("The run to resume does not exist")
+    if run["status"] in ACTIVE_STATUSES:
+        raise ActiveRunExistsError("The run to resume is still active")
+    if run["status"] in ("completed", "completed_with_warnings"):
+        raise NoRunFoundError("The run to resume is already complete")
+
+    weeks = decode_target_weeks(run)
+    checkpoint = run.get("checkpoint_week")
+    if isinstance(checkpoint, str):
+        checkpoint = date.fromisoformat(checkpoint)
+    remaining = [week for week in weeks if checkpoint is None or week >= checkpoint]
+    return {
+        "resume_run_id": str(run["run_id"]),
+        "remaining_weeks": [week.isoformat() for week in remaining],
+        "supersedes_run_id": str(run["run_id"]),
+        "original_checkpoint_stage": run.get("checkpoint_stage"),
+        "original_error_code": run.get("error_code"),
+    }

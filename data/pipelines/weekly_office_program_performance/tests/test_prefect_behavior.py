@@ -46,24 +46,24 @@ def _transform_three_times(rows_a: list[dict], rows_b: list[dict]) -> list[dict]
 
 def test_transform_task_caches_identical_input_and_misses_on_change(monkeypatch):
     calls = {"count": 0}
-    real_transform = tasks.transform_week
+    real_validate = tasks.validate_and_dedupe
 
-    def counting_transform(*args, **kwargs):
+    def counting_validate(*args, **kwargs):
         calls["count"] += 1
-        return real_transform(*args, **kwargs)
+        return real_validate(*args, **kwargs)
 
-    monkeypatch.setattr(tasks, "transform_week", counting_transform)
+    monkeypatch.setattr(tasks, "validate_and_dedupe", counting_validate)
 
     rows_a = [_row("10.00")]
     rows_b = [_row("25.00")]
     first, second, third = _transform_three_times(rows_a, rows_b)
 
-    # Two executions for three calls: identical input reused the cached result,
-    # changed input invalidated it.
+    # Three task calls but two executions: identical input reused the cached
+    # validated input, changed input invalidated it.
     assert calls["count"] == 2
-    assert first["rows"] == second["rows"]
-    assert first["rows"][0]["total_material_cost"] == "10.00"
-    assert third["rows"][0]["total_material_cost"] == "25.00"
+    assert first == second
+    assert first["events"][0]["unit_cost"] == "10.00"
+    assert third["events"][0]["unit_cost"] == "25.00"
 
 
 @flow

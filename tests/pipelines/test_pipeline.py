@@ -1,7 +1,8 @@
 """Isolated transformation tests for the Nexova weekly performance KPIs.
 
-These tests are in-memory and require no database, network, Prefect server, or
-secrets. They assert the four briefing KPIs against hand-calculated inputs.
+These tests call the Prefect task ``.fn`` implementations with in-memory
+telemetry-shaped fixtures. No database, network, Prefect server, or secrets are
+required. Pure validation and assembly behavior is covered alongside the tasks.
 """
 
 from __future__ import annotations
@@ -10,9 +11,16 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from data.process.weekly_performance import transform_week
+import pytest
+
+from data.pipelines.weekly_office_program_performance import tasks
+from data.process.weekly_performance import kpi as pure_kpi
+from data.process.weekly_performance.aggregate import assemble_week
+from data.process.weekly_performance.transform import validate_and_dedupe
 
 WEEK = date(2026, 10, 19)
+DIMENSIONS = (("valencia", "b2b-sales"), ("miami", "b2b-sales"))
+KNOWN = ("b2b-sales",)
 _OMIT_EVENT_ID = object()
 
 
@@ -60,122 +68,205 @@ def _row(
     }
 
 
-def _run(
-    rows,
+def _events(rows: list[dict]) -> list[dict]:
+    validated = validate_and_dedupe(rows, week_start=WEEK)
+    return [event.as_dict() for event in validated.events]
+
+
+def _assemble(
+    rows: list[dict],
     *,
-    dimensions=(("valencia", "b2b-sales"), ("miami", "b2b-sales")),
-    known=("b2b-sales",),
+    dimensions=DIMENSIONS,
+    known=KNOWN,
     threshold=Decimal("0.05"),
 ):
-    return transform_week(
-        rows,
+    validated = validate_and_dedupe(rows, week_start=WEEK)
+    events = [event.as_dict() for event in validated.events]
+    assembled = assemble_week(
         week_start=WEEK,
+        events=events,
+        rejections=[rejection.to_dict() for rejection in validated.rejections],
+        cost_by_pair=pure_kpi.compute_total_material_cost(events),
+        kits_by_pair=pure_kpi.count_kits_delivered(events),
+        shortages_by_pair=pure_kpi.count_shortage_events(events),
+        variances_by_pair=pure_kpi.count_cost_variance_events(events),
         dimension_pairs=dimensions,
         known_programmes=known,
+        records_extracted=validated.records_extracted,
+        records_deduplicated=validated.records_deduplicated,
+        duplicate_payload_conflict_count=validated.duplicate_payload_conflict_count,
+        order_identity_anomaly_count=validated.order_identity_anomaly_count,
+        order_identity_missing_count=validated.order_identity_missing_count,
         rejection_threshold=threshold,
     )
+    return validated, assembled
 
 
-def _entry(result, office: str, programme: str) -> dict:
+def _entry(assembled, office: str, programme: str) -> dict:
     return next(
         row
-        for row in result.rows
+        for row in assembled.rows
         if row["office"] == office and row["programme_id"] == programme
     )
 
 
-def test_total_material_cost_uses_quantity_and_decimal_cost():
-    result = _run(
-        [
-            _row(
-                "inbound_order_created",
-                quantity=3,
-                unit_cost="12.50",
-                order_id="1",
-            ),
-            _row(
-                "inbound_order_created",
-                quantity=2,
-                unit_cost="5.25",
-                order_id="2",
-            ),
-            _row(
-                "kit_cost_variance_detected",
-                quantity=4,
-                unit_cost="99.99",
-                order_id="3",
-            ),
-        ],
-        dimensions=(("valencia", "b2b-sales"),),
-    )
+# ---------------------------------------------------------------------------
+# Hand-calculated KPI task cases (the four briefing KPIs)
+# ---------------------------------------------------------------------------
 
-    row = _entry(result, "valencia", "b2b-sales")
+
+def test_total_material_cost_uses_quantity_and_decimal_cost():
+    rows = [
+        _row("inbound_order_created", quantity=3, unit_cost="12.50", order_id="1"),
+        _row("inbound_order_created", quantity=2, unit_cost="5.25", order_id="2"),
+        _row(
+            "kit_cost_variance_detected",
+            quantity=4,
+            unit_cost="99.99",
+            order_id="3",
+            extra={"variance_percent": 55.0},
+        ),
+    ]
+
+    totals = tasks.compute_total_material_cost.fn(_events(rows))
+    assert totals == {"valencia|b2b-sales": "48.00"}
+
+    _, assembled = _assemble(rows, dimensions=(("valencia", "b2b-sales"),))
+    row = _entry(assembled, "valencia", "b2b-sales")
     assert row["total_material_cost"] == Decimal("48.00")
     assert row["currency"] == "EUR"
     assert row["cost_variance_events_count"] == 1
 
 
 def test_kits_delivered_counts_events_not_units():
-    result = _run(
-        [
-            _row("outbound_order_created", quantity=10, order_id="1"),
-            _row("outbound_order_created", quantity=2, order_id="2"),
-        ],
-        dimensions=(("valencia", "b2b-sales"),),
-    )
+    rows = [
+        _row("outbound_order_created", quantity=10, order_id="1"),
+        _row("outbound_order_created", quantity=2, order_id="2"),
+    ]
 
-    assert _entry(result, "valencia", "b2b-sales")["kits_delivered_count"] == 2
+    counts = tasks.count_kits_delivered.fn(_events(rows))
+    assert counts == {"valencia|b2b-sales": 2}
+
+    _, assembled = _assemble(rows, dimensions=(("valencia", "b2b-sales"),))
+    assert _entry(assembled, "valencia", "b2b-sales")["kits_delivered_count"] == 2
 
 
 def test_shortage_frequency_counts_captured_threshold_events():
-    result = _run(
-        [
-            _row("stock_threshold_triggered", quantity=0, extra={"min_stock": 10}),
-            _row("stock_threshold_triggered", quantity=5, extra={"min_stock": 10}),
-        ],
-        dimensions=(("valencia", "b2b-sales"),),
-    )
+    rows = [
+        _row("stock_threshold_triggered", quantity=0, extra={"min_stock": 10}),
+        _row("stock_threshold_triggered", quantity=5, extra={"min_stock": 10}),
+    ]
 
+    counts = tasks.count_shortage_events.fn(_events(rows))
+    assert counts == {"valencia|b2b-sales": 2}
+
+    _, assembled = _assemble(rows, dimensions=(("valencia", "b2b-sales"),))
     assert (
-        _entry(result, "valencia", "b2b-sales")["shortage_events_count"] == 2
+        _entry(assembled, "valencia", "b2b-sales")["shortage_events_count"] == 2
     )
 
 
 def test_cost_variance_frequency_counts_alerts():
-    result = _run(
-        [
-            _row(
-                "kit_cost_variance_detected",
-                quantity=1,
-                unit_cost="20.00",
-                order_id="1",
-                extra={"variance_percent": 55.0},
-            ),
-            _row(
-                "kit_cost_variance_detected",
-                quantity=1,
-                unit_cost="5.00",
-                order_id="2",
-                extra={"variance_percent": -25.0},
-            ),
-        ],
-        dimensions=(("valencia", "b2b-sales"),),
-    )
+    rows = [
+        _row(
+            "kit_cost_variance_detected",
+            quantity=1,
+            unit_cost="20.00",
+            order_id="1",
+            extra={"variance_percent": 55.0},
+        ),
+        _row(
+            "kit_cost_variance_detected",
+            quantity=1,
+            unit_cost="5.00",
+            order_id="2",
+            extra={"variance_percent": -25.0},
+        ),
+    ]
 
-    row = _entry(result, "valencia", "b2b-sales")
+    counts = tasks.count_cost_variance_events.fn(_events(rows))
+    assert counts == {"valencia|b2b-sales": 2}
+
+    _, assembled = _assemble(rows, dimensions=(("valencia", "b2b-sales"),))
+    row = _entry(assembled, "valencia", "b2b-sales")
     assert row["cost_variance_events_count"] == 2
     assert row["total_material_cost"] == Decimal("0.00")
 
 
-def test_cost_rounds_half_up_to_two_decimal_places():
-    result = _run(
-        [_row("inbound_order_created", quantity=1, unit_cost="0.005", order_id="1")],
-        dimensions=(("valencia", "b2b-sales"),),
-    )
+# ---------------------------------------------------------------------------
+# Defensive behavior of every KPI task
+# ---------------------------------------------------------------------------
 
-    assert _entry(result, "valencia", "b2b-sales")["total_material_cost"] == Decimal(
-        "0.01"
-    )
+
+def test_kpi_tasks_return_empty_mappings_for_empty_input():
+    assert tasks.compute_total_material_cost.fn([]) == {}
+    assert tasks.count_kits_delivered.fn([]) == {}
+    assert tasks.count_shortage_events.fn([]) == {}
+    assert tasks.count_cost_variance_events.fn([]) == {}
+
+
+def test_material_cost_task_rejects_malformed_quantities_and_costs():
+    valid = {
+        "event_type": "inbound_order_created",
+        "office": "valencia",
+        "programme_id": "b2b-sales",
+    }
+    malformed = [
+        {**valid, "quantity": None, "unit_cost": "1.00"},
+        {**valid, "quantity": 1, "unit_cost": None},
+        {**valid, "quantity": "abc", "unit_cost": "1.00"},
+        {**valid, "quantity": 1.5, "unit_cost": "1.00"},
+        {**valid, "quantity": 0, "unit_cost": "1.00"},
+        {**valid, "quantity": -2, "unit_cost": "1.00"},
+        {**valid, "quantity": 1, "unit_cost": "NaN"},
+        {**valid, "quantity": 1, "unit_cost": "Infinity"},
+        {**valid, "quantity": 1, "unit_cost": 0},
+        {**valid, "quantity": 1, "unit_cost": -1},
+        {**valid, "quantity": 1, "unit_cost": "not-a-number"},
+    ]
+    for payload in malformed:
+        with pytest.raises(ValueError):
+            tasks.compute_total_material_cost.fn([payload])
+
+
+def test_count_tasks_reject_events_with_missing_dimensions():
+    cases = [
+        (tasks.count_kits_delivered.fn, "outbound_order_created"),
+        (tasks.count_shortage_events.fn, "stock_threshold_triggered"),
+        (tasks.count_cost_variance_events.fn, "kit_cost_variance_detected"),
+    ]
+    for task_fn, event_type in cases:
+        with pytest.raises(ValueError):
+            # Missing office on a matching event.
+            task_fn([{"event_type": event_type, "programme_id": "x"}])
+        with pytest.raises(ValueError):
+            # Missing programme on a matching event.
+            task_fn([{"event_type": event_type, "office": "valencia"}])
+        with pytest.raises(ValueError):
+            # Missing event type entirely.
+            task_fn([{"office": "valencia", "programme_id": "x"}])
+
+
+def test_kpi_tasks_keep_office_currencies_separate():
+    rows = [
+        _row("inbound_order_created", office="valencia", quantity=3, unit_cost="10.00", order_id="1"),
+        _row("inbound_order_created", office="miami", quantity=2, unit_cost="4.00", order_id="2"),
+    ]
+
+    totals = tasks.compute_total_material_cost.fn(_events(rows))
+    assert totals == {
+        "valencia|b2b-sales": "30.00",
+        "miami|b2b-sales": "8.00",
+    }
+
+    _, assembled = _assemble(rows)
+    assert _entry(assembled, "valencia", "b2b-sales")["currency"] == "EUR"
+    assert _entry(assembled, "miami", "b2b-sales")["currency"] == "USD"
+
+
+# ---------------------------------------------------------------------------
+# Deduplication and validation
+# ---------------------------------------------------------------------------
 
 
 def test_dedup_keeps_earliest_event_and_reports_payload_conflict():
@@ -198,28 +289,32 @@ def test_dedup_keeps_earliest_event_and_reports_payload_conflict():
     )
     later["id"] = "00000000-0000-0000-0000-000000000000"
 
-    result = _run([later, earlier], dimensions=(("valencia", "b2b-sales"),))
-
-    assert result.records_extracted == 2
-    assert result.records_deduplicated == 1
-    assert result.reconciliation["duplicate_count"] == 1
-    assert result.reconciliation["duplicate_payload_conflict_count"] == 1
-    assert _entry(result, "valencia", "b2b-sales")["total_material_cost"] == Decimal(
-        "10.00"
+    validated, assembled = _assemble(
+        [later, earlier], dimensions=(("valencia", "b2b-sales"),)
     )
+
+    assert validated.records_extracted == 2
+    assert validated.records_deduplicated == 1
+    assert validated.duplicate_payload_conflict_count == 1
+    assert assembled.reconciliation["duplicate_count"] == 1
+    assert _entry(assembled, "valencia", "b2b-sales")[
+        "total_material_cost"
+    ] == Decimal("10.00")
 
 
 def test_missing_event_id_falls_back_to_source_row_id():
     first = _row("inbound_order_created", event_id=None, quantity=1, unit_cost="1.00")
     second = _row("inbound_order_created", event_id=None, quantity=1, unit_cost="2.00")
 
-    result = _run([first, second], dimensions=(("valencia", "b2b-sales"),))
-
-    assert result.records_extracted == 2
-    assert result.records_deduplicated == 2
-    assert _entry(result, "valencia", "b2b-sales")["total_material_cost"] == Decimal(
-        "3.00"
+    validated, assembled = _assemble(
+        [first, second], dimensions=(("valencia", "b2b-sales"),)
     )
+
+    assert validated.records_extracted == 2
+    assert validated.records_deduplicated == 2
+    assert _entry(assembled, "valencia", "b2b-sales")[
+        "total_material_cost"
+    ] == Decimal("3.00")
 
 
 def test_week_boundary_uses_utc_monday():
@@ -238,18 +333,20 @@ def test_week_boundary_uses_utc_monday():
         timestamp=datetime(2026, 10, 19, 0, 0, tzinfo=timezone.utc),
     )
 
-    result = _run([sunday, monday], dimensions=(("valencia", "b2b-sales"),))
+    validated, assembled = _assemble(
+        [sunday, monday], dimensions=(("valencia", "b2b-sales"),)
+    )
 
-    assert [rejection.reason for rejection in result.rejections] == [
+    assert [rejection.reason for rejection in validated.rejections] == [
         "week_out_of_range"
     ]
-    assert _entry(result, "valencia", "b2b-sales")["total_material_cost"] == Decimal(
-        "7.00"
-    )
+    assert _entry(assembled, "valencia", "b2b-sales")[
+        "total_material_cost"
+    ] == Decimal("7.00")
 
 
 def test_currency_office_mismatch_is_rejected_not_converted():
-    result = _run(
+    validated, assembled = _assemble(
         [
             _row(
                 "inbound_order_created",
@@ -263,35 +360,15 @@ def test_currency_office_mismatch_is_rejected_not_converted():
         dimensions=(("valencia", "b2b-sales"),),
     )
 
-    assert [rejection.reason for rejection in result.rejections] == [
+    assert [rejection.reason for rejection in validated.rejections] == [
         "currency_office_mismatch"
     ]
-    assert result.publication_blocked is True
-    assert "rejection_threshold_exceeded" in result.block_reasons
-
-
-def test_malformed_quantity_and_cost_are_rejected():
-    rows = [
-        _row("inbound_order_created", quantity=0, unit_cost="1.00", order_id="1"),
-        _row("inbound_order_created", quantity=1, unit_cost="0", order_id="2"),
-        _row("inbound_order_created", quantity="abc", unit_cost="1.00", order_id="3"),
-        _row("inbound_order_created", quantity=1, unit_cost="NaN", order_id="4"),
-    ]
-
-    result = _run(rows, dimensions=(("valencia", "b2b-sales"),))
-
-    reasons = {rejection.reason for rejection in result.rejections}
-    assert reasons == {
-        "quantity_not_positive",
-        "unit_cost_not_positive",
-        "quantity_not_integer",
-        "unit_cost_not_finite",
-    }
-    assert result.publication_blocked is True
+    assert assembled.publication_blocked is True
+    assert "rejection_threshold_exceeded" in assembled.block_reasons
 
 
 def test_schema_version_and_service_are_rejected():
-    result = _run(
+    validated, _ = _assemble(
         [
             _row(
                 "inbound_order_created",
@@ -309,56 +386,28 @@ def test_schema_version_and_service_are_rejected():
         dimensions=(("valencia", "b2b-sales"),),
     )
 
-    reasons = {rejection.reason for rejection in result.rejections}
+    reasons = {rejection.reason for rejection in validated.rejections}
     assert reasons == {"schema_version_not_supported", "service_not_allowed"}
 
 
-def test_zero_fill_uses_real_dimension_scaffold():
-    result = _run(
-        [_row("outbound_order_created", quantity=1, order_id="1")],
-        dimensions=(
-            ("valencia", "b2b-sales"),
-            ("miami", "b2b-sales"),
-            ("valencia", "basic-leadership"),
-        ),
-    )
-
-    assert len(result.rows) == 3
-    assert result.reconciliation["zero_filled_row_count"] == 2
-    miami = _entry(result, "miami", "b2b-sales")
-    assert miami["total_material_cost"] == Decimal("0.00")
-    assert miami["kits_delivered_count"] == 0
-    assert miami["currency"] == "USD"
-
-
-def test_unknown_programme_slug_is_published_with_warning():
-    result = _run(
+def test_malformed_quantity_and_cost_are_rejected():
+    validated, _ = _assemble(
         [
-            _row(
-                "outbound_order_created",
-                programme="test-programme",
-                quantity=1,
-                order_id="1",
-            )
+            _row("inbound_order_created", quantity=0, unit_cost="1.00", order_id="1"),
+            _row("inbound_order_created", quantity=1, unit_cost="0", order_id="2"),
+            _row("inbound_order_created", quantity="abc", unit_cost="1.00", order_id="3"),
+            _row("inbound_order_created", quantity=1, unit_cost="NaN", order_id="4"),
         ],
         dimensions=(("valencia", "b2b-sales"),),
-        known=("b2b-sales",),
     )
 
-    assert _entry(result, "valencia", "test-programme")["kits_delivered_count"] == 1
-    assert result.reconciliation["unknown_programme_ids"] == ["test-programme"]
-
-
-def test_empty_source_week_with_valid_dimensions_yields_zero_rows():
-    result = _run(
-        [],
-        dimensions=(("valencia", "b2b-sales"), ("miami", "b2b-sales")),
-    )
-
-    assert len(result.rows) == 2
-    assert all(row["total_material_cost"] == Decimal("0.00") for row in result.rows)
-    assert result.publication_blocked is False
-    assert result.reconciliation["zero_filled_row_count"] == 2
+    reasons = {rejection.reason for rejection in validated.rejections}
+    assert reasons == {
+        "quantity_not_positive",
+        "unit_cost_not_positive",
+        "quantity_not_integer",
+        "unit_cost_not_finite",
+    }
 
 
 def test_rejection_threshold_is_strictly_greater_than_five_percent():
@@ -378,12 +427,11 @@ def test_rejection_threshold_is_strictly_greater_than_five_percent():
         )
     ]
 
-    at_boundary = _run(
+    _, at_boundary = _assemble(
         valid + invalid, dimensions=(("valencia", "b2b-sales"),)
     )
-    above_boundary = _run(
-        valid + invalid + second_invalid,
-        dimensions=(("valencia", "b2b-sales"),),
+    _, above_boundary = _assemble(
+        valid + invalid + second_invalid, dimensions=(("valencia", "b2b-sales"),)
     )
 
     assert at_boundary.reconciliation["rejection_rate"] == "0.0500"
@@ -392,16 +440,122 @@ def test_rejection_threshold_is_strictly_greater_than_five_percent():
     assert "rejection_threshold_exceeded" in above_boundary.block_reasons
 
 
+# ---------------------------------------------------------------------------
+# Assembly, zero-fill, and reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_cost_rounds_half_up_to_two_decimal_places():
+    _, assembled = _assemble(
+        [_row("inbound_order_created", quantity=1, unit_cost="0.005", order_id="1")],
+        dimensions=(("valencia", "b2b-sales"),),
+    )
+
+    assert _entry(assembled, "valencia", "b2b-sales")[
+        "total_material_cost"
+    ] == Decimal("0.01")
+
+
+def test_zero_fill_uses_real_dimension_scaffold():
+    _, assembled = _assemble(
+        [_row("outbound_order_created", quantity=1, order_id="1")],
+        dimensions=(
+            ("valencia", "b2b-sales"),
+            ("miami", "b2b-sales"),
+            ("valencia", "basic-leadership"),
+        ),
+    )
+
+    assert len(assembled.rows) == 3
+    assert assembled.reconciliation["zero_filled_row_count"] == 2
+    miami = _entry(assembled, "miami", "b2b-sales")
+    assert miami["total_material_cost"] == Decimal("0.00")
+    assert miami["kits_delivered_count"] == 0
+    assert miami["currency"] == "USD"
+
+
+def test_unknown_programme_slug_is_published_with_warning():
+    _, assembled = _assemble(
+        [
+            _row(
+                "outbound_order_created",
+                programme="test-programme",
+                quantity=1,
+                order_id="1",
+            )
+        ],
+        dimensions=(("valencia", "b2b-sales"),),
+        known=("b2b-sales",),
+    )
+
+    assert _entry(assembled, "valencia", "test-programme")["kits_delivered_count"] == 1
+    assert assembled.reconciliation["unknown_programme_ids"] == ["test-programme"]
+
+
+def test_empty_source_week_with_valid_dimensions_yields_zero_rows():
+    _, assembled = _assemble([], dimensions=DIMENSIONS)
+
+    assert len(assembled.rows) == 2
+    assert all(row["total_material_cost"] == Decimal("0.00") for row in assembled.rows)
+    assert assembled.publication_blocked is False
+    assert assembled.reconciliation["zero_filled_row_count"] == 2
+
+
 def test_week_fingerprint_is_stable_for_identical_input():
     rows = [
         _row("outbound_order_created", quantity=1, order_id="1"),
         _row("inbound_order_created", quantity=2, unit_cost="3.00", order_id="2"),
     ]
 
-    first = _run(rows, dimensions=(("valencia", "b2b-sales"),))
-    second = _run(rows, dimensions=(("valencia", "b2b-sales"),))
+    _, first = _assemble(rows, dimensions=(("valencia", "b2b-sales"),))
+    _, second = _assemble(rows, dimensions=(("valencia", "b2b-sales"),))
 
     assert (
         first.reconciliation["week_fingerprint"]
         == second.reconciliation["week_fingerprint"]
+    )
+
+
+def test_week_fingerprint_changes_on_cost_only_change():
+    original = [
+        _row(
+            "inbound_order_created",
+            event_id="fixed-event-1",
+            quantity=2,
+            unit_cost="3.00",
+            order_id="1",
+        )
+    ]
+    repriced = [
+        _row(
+            "inbound_order_created",
+            event_id="fixed-event-1",
+            quantity=2,
+            unit_cost="4.00",
+            order_id="1",
+        )
+    ]
+
+    _, first = _assemble(original, dimensions=(("valencia", "b2b-sales"),))
+    _, second = _assemble(repriced, dimensions=(("valencia", "b2b-sales"),))
+
+    assert (
+        first.reconciliation["week_fingerprint"]
+        != second.reconciliation["week_fingerprint"]
+    )
+
+
+def test_week_fingerprint_changes_on_count_only_change():
+    original = [_row("outbound_order_created", quantity=1, order_id="1")]
+    with_extra = [
+        _row("outbound_order_created", quantity=1, order_id="1"),
+        _row("outbound_order_created", quantity=1, order_id="2"),
+    ]
+
+    _, first = _assemble(original, dimensions=(("valencia", "b2b-sales"),))
+    _, second = _assemble(with_extra, dimensions=(("valencia", "b2b-sales"),))
+
+    assert (
+        first.reconciliation["week_fingerprint"]
+        != second.reconciliation["week_fingerprint"]
     )

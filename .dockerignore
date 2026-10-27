@@ -4,5 +4,11 @@
 **/.venv
 **/__pycache__
 **/*.pyc
+**/.pytest_cache
+**/.coverage
+# Never bake local secrets or the dev auth store into an image.
+**/.env
+backrooms/services/Supply_directory_API/suppliers_db.json
+backrooms/services/Supply_directory_API/password_resets_db.json
 data/raw
 performance-audit

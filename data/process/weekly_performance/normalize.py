@@ -58,6 +58,20 @@ class NormalizedEvent:
     order_id: str | None
     dedup_key: str
 
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-safe representation consumed by the KPI tasks."""
+        return {
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "office": self.office,
+            "programme_id": self.programme_id,
+            "currency": self.currency,
+            "quantity": self.quantity,
+            "unit_cost": str(self.unit_cost) if self.unit_cost is not None else None,
+            "timestamp": self.timestamp.isoformat(),
+            "order_id": self.order_id,
+        }
+
 
 @dataclass
 class DedupResult:

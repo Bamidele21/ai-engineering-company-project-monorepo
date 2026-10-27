@@ -1380,3 +1380,32 @@ The design above remains the architecture. This section records the decisions an
 3. Worker project tests: `uv run pytest -q` from `data/pipelines`.
 4. PostgreSQL integration tests use `TEST_DATABASE_URL` and are marked `postgres`.
 5. Evidence: `data/eval/weekly_performance/sprint1-report.md`.
+
+### 22.5 Sprint 2 subflow topology (2026-10-27)
+
+The Part 3 requirement raised the Part 2 topology from tasks to subflows. The main flow now coordinates three critical subflows and two optional ones; its task-level retries, cache, locks, audit identity, atomic load, and CLI are unchanged.
+
+| Subflow (`@flow`) | Explicit inputs → outputs |
+| --- | --- |
+| `extract_weekly_office_program_telemetry_flow` | `week_start` → sanitized raw rows, dimension scaffold, known programmes, source counters. |
+| `transform_weekly_office_program_performance_flow` | raw rows, dimension scaffold, known programmes, target week → KPI rows, rejection records, reconciliation, counters. |
+| `load_weekly_office_program_performance_flow` | week, rows, rejections, `run_id` → committed row count and quarantine count. |
+| `publish_weekly_performance_snapshot_flow` (optional) | run id, week, sanitized summary → snapshot path; invoked with `return_state=True`. |
+
+Inside the transform subflow, `transform_weekly_performance` keeps its name and one-hour cache but its responsibility is now the **validation/normalization boundary**: it deduplicates, normalizes, and validates the source rows and returns reusable validated input. It never invokes other Prefect tasks. The subflow then invokes the four domain KPI tasks — `compute_total_material_cost`, `count_kits_delivered`, `count_shortage_events`, `count_cost_variance_events` — followed by pure assembly, zero-fill, and reconciliation. Each KPI task wraps a pure function in `data/process/weekly_performance/kpi.py` and is testable in isolation through its `.fn`.
+
+Recovery and late-event semantics added with the refactor:
+
+1. **Resume** (`resume_from`): a failed run's checkpoint decides the remaining weeks. Committed weeks are skipped because their transactions already committed; the failed week is recomputed in full. The resume run is `trigger_type='recompute'` and records `supersedes_run_id`.
+2. **Late-event supersession**: before load, the new week fingerprint is compared with the latest completed run that published the same week (`previous_publication`). A difference records `reconciliation.recomputed_weeks` with the old and new fingerprints and sets `supersedes_run_id`. An unchanged recompute supersedes nothing. The fingerprint covers every KPI value, both dimensions, and the accepted event identities, so cost-only and count-only changes both invalidate it; input cache fingerprints remain a separate concern on the transform task.
+3. **Races**: the active-run partial unique index, the session advisory lock, and the Prefect concurrency limit are unchanged. Flow-level tests cover scheduled-run skipping, manual-run conflicts, queued-run adoption, stale-run recovery, and dispatch failure.
+
+### 22.6 Monitoring enhancements and their resilience questions
+
+The freshness/silence checks in `weekly_office_program_performance/monitoring.py` answer design questions 16.4, 16.7, and 16.10:
+
+1. **16.4 (silence versus true absence):** `weekly_performance_health_flow` runs independently of the ETL and distinguishes a missing run (no completed run in eight days), a failed run, a stale heartbeat, a zero week that follows activity (`unexpected_silence`), and one-sided office silence (`office_silence`). Fewer than two prior completed runs is labelled `insufficient_baseline`, not an alert.
+2. **16.7 (where to resume after an outage):** the checkpoint fields drive `plan_resume`, and the stale-heartbeat lease marks abandoned queued/running rows `failed` with `error_code='stale_run'` before the next run starts.
+3. **16.10 (concurrent runs):** the health flow observes the same active-run rows, and race behavior is covered by flow-level tests plus the PostgreSQL active-run uniqueness test.
+
+Alert delivery is the non-critical `alert_weekly_performance_flow`: it posts a sanitized payload to `REPORTING_ALERTS_WEBHOOK` when configured, is invoked with `return_state=True` from both the main flow and the health flow, and can never undo committed data. An eight-week baseline stores the completed-run history used by the silence comparisons.

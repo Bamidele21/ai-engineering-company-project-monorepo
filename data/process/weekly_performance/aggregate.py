@@ -1,13 +1,14 @@
-"""Pure KPI aggregation, dimension zero-fill, and reconciliation."""
+"""Pure assembly of KPI task outputs into destination rows, plus reconciliation."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .constants import (
     INBOUND_EVENT,
@@ -18,7 +19,7 @@ from .constants import (
     SHORTAGE_EVENT,
     VARIANCE_EVENT,
 )
-from .normalize import NormalizedEvent, Rejection
+from .kpi import split_pair
 
 
 def _money(value: Decimal) -> Decimal:
@@ -62,11 +63,18 @@ class AggregateResult:
 
 
 def build_week_fingerprint(
-    events: Iterable[NormalizedEvent], rows: Iterable[dict[str, Any]]
+    events: Iterable[Mapping[str, Any]],
+    rows: Iterable[dict[str, Any]],
 ) -> str:
-    """Hash accepted event identities plus the published KPI values."""
+    """Hash accepted event identities plus every published KPI value.
+
+    The fingerprint covers all four KPIs and both dimensions, so a cost-only
+    change, a count-only change, and an identity change all invalidate it.
+    Input cache fingerprints are a separate concern handled by the transform
+    task's cache key.
+    """
     payload = {
-        "event_ids": sorted(event.event_id for event in events),
+        "event_ids": sorted(str(event["event_id"]) for event in events),
         "rows": sorted(
             (
                 {
@@ -87,11 +95,15 @@ def build_week_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def aggregate_events(
-    events: list[NormalizedEvent],
-    rejections: list[Rejection],
+def assemble_week(
     *,
     week_start: date,
+    events: list[Mapping[str, Any]],
+    rejections: list[Mapping[str, Any]],
+    cost_by_pair: Mapping[str, str],
+    kits_by_pair: Mapping[str, int],
+    shortages_by_pair: Mapping[str, int],
+    variances_by_pair: Mapping[str, int],
     dimension_pairs: Iterable[tuple[str, str]],
     known_programmes: Iterable[str],
     records_extracted: int,
@@ -101,36 +113,43 @@ def aggregate_events(
     order_identity_missing_count: int = 0,
     rejection_threshold: Decimal = REJECTION_THRESHOLD,
 ) -> AggregateResult:
-    """Aggregate normalized events into the fixed destination grain."""
+    """Merge the four KPI maps, zero-fill the dimension spine, and reconcile."""
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
-    event_totals = {
-        INBOUND_EVENT: 0,
-        OUTBOUND_EVENT: 0,
-        SHORTAGE_EVENT: 0,
-        VARIANCE_EVENT: 0,
-    }
-
-    for event in events:
-        key = (event.office, event.programme_id)
-        bucket = grouped.setdefault(
-            key,
-            {
+    for key, value in cost_by_pair.items():
+        office, programme_id = split_pair(key)
+        grouped[(office, programme_id)] = {
+            "total_material_cost": Decimal(value),
+            "kits_delivered_count": kits_by_pair.get(key, 0),
+            "shortage_events_count": shortages_by_pair.get(key, 0),
+            "cost_variance_events_count": variances_by_pair.get(key, 0),
+        }
+    for key, value in kits_by_pair.items():
+        if key not in cost_by_pair:
+            office, programme_id = split_pair(key)
+            grouped[(office, programme_id)] = {
+                "total_material_cost": Decimal("0.00"),
+                "kits_delivered_count": value,
+                "shortage_events_count": shortages_by_pair.get(key, 0),
+                "cost_variance_events_count": variances_by_pair.get(key, 0),
+            }
+    for key, value in shortages_by_pair.items():
+        if key not in cost_by_pair and key not in kits_by_pair:
+            office, programme_id = split_pair(key)
+            grouped[(office, programme_id)] = {
+                "total_material_cost": Decimal("0.00"),
+                "kits_delivered_count": 0,
+                "shortage_events_count": value,
+                "cost_variance_events_count": variances_by_pair.get(key, 0),
+            }
+    for key, value in variances_by_pair.items():
+        if key not in cost_by_pair and key not in kits_by_pair and key not in shortages_by_pair:
+            office, programme_id = split_pair(key)
+            grouped[(office, programme_id)] = {
                 "total_material_cost": Decimal("0.00"),
                 "kits_delivered_count": 0,
                 "shortage_events_count": 0,
-                "cost_variance_events_count": 0,
-            },
-        )
-        event_totals[event.event_type] += 1
-        if event.event_type == INBOUND_EVENT:
-            assert event.quantity is not None and event.unit_cost is not None
-            bucket["total_material_cost"] += Decimal(event.quantity) * event.unit_cost
-        elif event.event_type == OUTBOUND_EVENT:
-            bucket["kits_delivered_count"] += 1
-        elif event.event_type == SHORTAGE_EVENT:
-            bucket["shortage_events_count"] += 1
-        elif event.event_type == VARIANCE_EVENT:
-            bucket["cost_variance_events_count"] += 1
+                "cost_variance_events_count": value,
+            }
 
     known = {
         slug.strip()
@@ -174,6 +193,7 @@ def aggregate_events(
         }
     )
 
+    event_totals = Counter(str(event.get("event_type", "")) for event in events)
     kpi_totals = {
         "outbound_order_created": sum(row["kits_delivered_count"] for row in rows),
         "stock_threshold_triggered": sum(row["shortage_events_count"] for row in rows),
@@ -194,13 +214,13 @@ def aggregate_events(
         "records_deduplicated_equals_accepted_plus_rejected": (
             records_deduplicated == accepted_count + rejected_count
         ),
-        "inbound_count_matches_accepted": event_totals[INBOUND_EVENT]
-        == sum(1 for event in events if event.event_type == INBOUND_EVENT),
-        "outbound_count_matches_kpi_total": event_totals[OUTBOUND_EVENT]
+        "inbound_count_matches_accepted": event_totals.get(INBOUND_EVENT, 0)
+        == sum(1 for event in events if event.get("event_type") == INBOUND_EVENT),
+        "outbound_count_matches_kpi_total": event_totals.get(OUTBOUND_EVENT, 0)
         == kpi_totals["outbound_order_created"],
-        "shortage_count_matches_kpi_total": event_totals[SHORTAGE_EVENT]
+        "shortage_count_matches_kpi_total": event_totals.get(SHORTAGE_EVENT, 0)
         == kpi_totals["stock_threshold_triggered"],
-        "variance_count_matches_kpi_total": event_totals[VARIANCE_EVENT]
+        "variance_count_matches_kpi_total": event_totals.get(VARIANCE_EVENT, 0)
         == kpi_totals["kit_cost_variance_detected"],
         "currencies_match_offices": all(
             row["currency"] == OFFICE_CURRENCY[row["office"]] for row in rows
@@ -230,7 +250,15 @@ def aggregate_events(
         "duplicate_payload_conflict_count": duplicate_payload_conflict_count,
         "order_identity_anomaly_count": order_identity_anomaly_count,
         "order_identity_missing_count": order_identity_missing_count,
-        "accepted_event_counts": dict(event_totals),
+        "accepted_event_counts": {
+            key: event_totals.get(key, 0)
+            for key in (
+                INBOUND_EVENT,
+                OUTBOUND_EVENT,
+                SHORTAGE_EVENT,
+                VARIANCE_EVENT,
+            )
+        },
         "kpi_totals": kpi_totals,
         "unknown_programme_ids": unknown_programmes,
         "dimension_pair_count": len(dimension_pairs_set),

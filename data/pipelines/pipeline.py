@@ -68,11 +68,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Inject a failure in the optional eval snapshot for demonstration.",
     )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
+        help="Resume a failed run: skip committed weeks and recompute the failed one.",
+    )
+    parser.add_argument(
+        "--health-check",
+        action="store_true",
+        help="Run the freshness/silence/baseline health checks instead of the ETL.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    if args.health_check:
+        from data.pipelines.weekly_office_program_performance.monitoring import (
+            weekly_performance_health_flow,
+        )
+
+        result = weekly_performance_health_flow()
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return 0
+
     weeks = args.weeks
     if weeks is None:
         weeks = 1 if args.week_start is not None else 2
@@ -84,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         requested_by=args.requested_by,
         run_id=args.run_id,
         snapshot_failure_injection=args.fail_snapshot,
+        resume_from=args.resume_from,
     )
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     return 0

@@ -11,7 +11,8 @@ database-free.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -366,6 +367,162 @@ def test_advisory_lock_serializes_runs(pg_engine, monkeypatch):
                 assert second is False
     finally:
         db.dispose_engine()
+
+
+def test_late_event_replacement_updates_week_without_duplicates(pg_engine):
+    """A late event recomputes the whole week, preserving row identity."""
+    run_id = uuid.uuid4()
+    run_log.create_or_adopt_run(
+        pg_engine,
+        run_id=run_id,
+        trigger_type="recompute",
+        triggered_by="test",
+        target_weeks=[WEEK],
+        source_window_start=WINDOW_START,
+        source_window_end=WINDOW_END,
+    )
+    original = [
+        {
+            "office": "valencia",
+            "programme_id": "b2b-sales",
+            "week_start": WEEK.isoformat(),
+            "total_material_cost": "10.00",
+            "kits_delivered_count": 0,
+            "shortage_events_count": 0,
+            "cost_variance_events_count": 0,
+            "currency": "EUR",
+        }
+    ]
+    load.load_week(
+        pg_engine, week_start=WEEK, rows=original, rejections=[], run_id=run_id
+    )
+    with pg_engine.connect() as connection:
+        first_id = connection.execute(
+            text(
+                "SELECT id FROM reporting.weekly_office_program_performance "
+                "WHERE week_start = :week"
+            ),
+            {"week": WEEK},
+        ).scalar_one()
+
+    late_event_week = [
+        {**original[0], "total_material_cost": "15.00"},
+        {
+            "office": "miami",
+            "programme_id": "b2b-sales",
+            "week_start": WEEK.isoformat(),
+            "total_material_cost": "0.00",
+            "kits_delivered_count": 1,
+            "shortage_events_count": 0,
+            "cost_variance_events_count": 0,
+            "currency": "USD",
+        },
+    ]
+    load.load_week(
+        pg_engine, week_start=WEEK, rows=late_event_week, rejections=[], run_id=run_id
+    )
+
+    with pg_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT id, office, total_material_cost FROM "
+                "reporting.weekly_office_program_performance "
+                "WHERE week_start = :week ORDER BY office"
+            ),
+            {"week": WEEK},
+        ).mappings().all()
+    assert len(rows) == 2
+    assert rows[0]["office"] == "miami"
+    valencia = rows[1]
+    assert valencia["id"] == first_id
+    assert float(valencia["total_material_cost"]) == 15.0
+
+
+def test_multi_week_resume_skips_committed_and_recomputes_failed(pg_engine):
+    """After a later week fails, a resume plans only the uncommitted week."""
+    run_id = uuid.uuid4()
+    second_week = WEEK + timedelta(weeks=1)
+    run_log.create_or_adopt_run(
+        pg_engine,
+        run_id=run_id,
+        trigger_type="manual",
+        triggered_by="test",
+        target_weeks=[WEEK, second_week],
+        source_window_start=WINDOW_START,
+        source_window_end=WINDOW_END + timedelta(weeks=1),
+    )
+    first_week_rows = [
+        {
+            "office": "valencia",
+            "programme_id": "b2b-sales",
+            "week_start": WEEK.isoformat(),
+            "total_material_cost": "10.00",
+            "kits_delivered_count": 0,
+            "shortage_events_count": 0,
+            "cost_variance_events_count": 0,
+            "currency": "EUR",
+        }
+    ]
+    load.load_week(
+        pg_engine, week_start=WEEK, rows=first_week_rows, rejections=[], run_id=run_id
+    )
+
+    # The later week fails after the earlier one committed.
+    run_log.finalize_run(
+        pg_engine,
+        run_id,
+        status="failed",
+        checkpoint_stage="load",
+        checkpoint_week=second_week,
+        error_code="load_conflict",
+        error_message="injected failure on the later week",
+    )
+
+    plan = run_log.plan_resume(pg_engine, run_id)
+    assert plan["remaining_weeks"] == [second_week.isoformat()]
+    assert plan["supersedes_run_id"] == str(run_id)
+
+    # The resume processes only the failed week; the committed week is intact.
+    resumed_id = uuid.uuid4()
+    run_log.create_or_adopt_run(
+        pg_engine,
+        run_id=resumed_id,
+        trigger_type="recompute",
+        triggered_by="test",
+        target_weeks=[second_week],
+        source_window_start=WINDOW_START + timedelta(weeks=1),
+        source_window_end=WINDOW_END + timedelta(weeks=1),
+        supersedes_run_id=run_id,
+    )
+    second_week_rows = [
+        {
+            "office": "valencia",
+            "programme_id": "b2b-sales",
+            "week_start": second_week.isoformat(),
+            "total_material_cost": "7.00",
+            "kits_delivered_count": 1,
+            "shortage_events_count": 0,
+            "cost_variance_events_count": 0,
+            "currency": "EUR",
+        }
+    ]
+    load.load_week(
+        pg_engine, week_start=second_week, rows=second_week_rows,
+        rejections=[], run_id=resumed_id,
+    )
+
+    with pg_engine.connect() as connection:
+        counts = connection.execute(
+            text(
+                "SELECT week_start, count(*), sum(total_material_cost) FROM "
+                "reporting.weekly_office_program_performance "
+                "GROUP BY week_start ORDER BY week_start"
+            )
+        ).all()
+    assert counts == [
+        (WEEK, 1, Decimal("10.00")),
+        (second_week, 1, Decimal("7.00")),
+    ]
 
 
 def test_reporting_migration_is_idempotent_and_enables_rls(pg_engine):

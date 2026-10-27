@@ -1,4 +1,14 @@
-"""Main Prefect flow for the weekly office and programme performance report."""
+"""Main Prefect flow for the weekly office and programme performance report.
+
+The main flow coordinates three critical subflows in sequence — extraction,
+transformation, and load — plus two optional subflows invoked with
+``return_state=True``: the eval snapshot and alert delivery. Run-level locking,
+checkpointing, audit identity, and finalization stay in this flow.
+
+CLI example (from the repository root)::
+
+    python data/pipelines/pipeline.py --week-start 2026-10-19 --weeks 1
+"""
 
 from __future__ import annotations
 
@@ -24,15 +34,10 @@ from data.process.weekly_performance.errors import (
     PublicationBlockedError,
 )
 
-from . import config, db, run_log
+from . import config, db, run_log, subflows
+from .monitoring import alert_weekly_performance_flow
 from .schema import ensure_reporting_schema
-from .tasks import (
-    extract_weekly_telemetry,
-    load_weekly_performance,
-    record_pipeline_run,
-    transform_weekly_performance,
-    write_eval_snapshot,
-)
+from .tasks import record_pipeline_run
 
 _ALLOWED_TRIGGER_TYPES = {"scheduled", "manual", "backfill", "recompute"}
 
@@ -83,20 +88,30 @@ def weekly_office_program_performance_flow(
     requested_by: str | None = None,
     run_id: str | None = None,
     snapshot_failure_injection: bool = False,
+    resume_from: str | None = None,
 ) -> dict[str, Any]:
-    """Produce the weekly office/programme KPI report.
-
-    CLI example (from the repository root)::
-
-        python data/pipelines/pipeline.py --week-start 2026-10-19 --weeks 1
-    """
+    """Produce the weekly office/programme KPI report."""
     logger = get_run_logger()
     if trigger_type not in _ALLOWED_TRIGGER_TYPES:
         raise InvalidRangeError(
             "trigger_type must be scheduled, manual, backfill, or recompute"
         )
 
-    targets, window_start, window_end = _resolve_target_weeks(week_start, weeks)
+    supersedes_run_id: str | None = None
+    if resume_from:
+        plan = run_log.plan_resume(db.get_engine(), resume_from)
+        targets = [date.fromisoformat(value) for value in plan["remaining_weeks"]]
+        if not targets:
+            raise InvalidRangeError(
+                "Nothing to resume: every target week is already committed"
+            )
+        trigger_type = "recompute"
+        supersedes_run_id = plan["supersedes_run_id"]
+        window_start, _ = week_bounds(targets[0])
+        _, window_end = week_bounds(targets[-1])
+    else:
+        targets, window_start, window_end = _resolve_target_weeks(week_start, weeks)
+
     run_id = run_id or str(uuid.uuid4())
     flow_run_id = _current_flow_run_id()
     ensure_reporting_schema(db.get_engine())
@@ -110,6 +125,7 @@ def weekly_office_program_performance_flow(
     source_counts: Counter[str] = Counter()
     office_counts: Counter[str] = Counter()
     reconciliation: dict[str, Any] = {"weeks": {}, "warnings": []}
+    recomputed_weeks: dict[str, dict[str, str]] = {}
     warnings: list[str] = []
     stage = "extract"
     current_week = targets[0].isoformat()
@@ -137,6 +153,7 @@ def weekly_office_program_performance_flow(
                 "target_weeks": [week.isoformat() for week in targets],
                 "source_window_start": window_start.isoformat(),
                 "source_window_end": window_end.isoformat(),
+                "supersedes_run_id": supersedes_run_id,
             }
             try:
                 record_pipeline_run(
@@ -167,7 +184,9 @@ def weekly_office_program_performance_flow(
                         "checkpoint_week": current_week,
                     },
                 )
-                extracted = extract_weekly_telemetry(current_week)
+                extracted = subflows.extract_weekly_office_program_telemetry_flow(
+                    current_week
+                )
                 totals["records_extracted"] += len(extracted["raw_rows"])
                 _merge_counts(source_counts, extracted["source_event_counts"])
                 _merge_counts(office_counts, extracted["office_counts"])
@@ -194,11 +213,13 @@ def weekly_office_program_performance_flow(
                         "checkpoint_week": current_week,
                     },
                 )
-                transformed = transform_weekly_performance(
-                    extracted["raw_rows"],
-                    extracted["dimension_pairs"],
-                    extracted["known_programmes"],
-                    current_week,
+                transformed = (
+                    subflows.transform_weekly_office_program_performance_flow(
+                        extracted["raw_rows"],
+                        extracted["dimension_pairs"],
+                        extracted["known_programmes"],
+                        current_week,
+                    )
                 )
                 totals["records_deduplicated"] += int(
                     transformed["records_deduplicated"]
@@ -206,6 +227,18 @@ def weekly_office_program_performance_flow(
                 totals["records_rejected"] += int(transformed["records_rejected"])
                 week_reconciliation = dict(transformed["reconciliation"])
                 reconciliation["weeks"][current_week] = week_reconciliation
+
+                new_fingerprint = str(week_reconciliation["week_fingerprint"])
+                previous = run_log.previous_publication(
+                    db.get_engine(), target, exclude_run_id=run_id
+                )
+                if previous is not None and previous[1] != new_fingerprint:
+                    recomputed_weeks[current_week] = {
+                        "previous_fingerprint": previous[1],
+                        "new_fingerprint": new_fingerprint,
+                    }
+                    if supersedes_run_id is None:
+                        supersedes_run_id = previous[0]
 
                 if transformed["records_rejected"]:
                     warnings.append("rejected_events")
@@ -225,9 +258,11 @@ def weekly_office_program_performance_flow(
                         "checkpoint_week": current_week,
                         "records_deduplicated": totals["records_deduplicated"],
                         "records_rejected": totals["records_rejected"],
+                        "supersedes_run_id": supersedes_run_id,
                         "reconciliation": {
                             "weeks": reconciliation["weeks"],
                             "warnings": sorted(set(warnings)),
+                            "recomputed_weeks": recomputed_weeks,
                         },
                     },
                 )
@@ -249,10 +284,12 @@ def weekly_office_program_performance_flow(
                             "records_rejected": totals["records_rejected"],
                             "source_event_counts": dict(source_counts),
                             "office_counts": dict(office_counts),
+                            "supersedes_run_id": supersedes_run_id,
                             "reconciliation": {
                                 "weeks": reconciliation["weeks"],
                                 "warnings": sorted(set(warnings)),
                                 "block_reasons": transformed["block_reasons"],
+                                "recomputed_weeks": recomputed_weeks,
                             },
                             "error_code": blocked.code,
                             "error_message": str(blocked),
@@ -261,7 +298,7 @@ def weekly_office_program_performance_flow(
                     raise blocked
 
                 stage = "load"
-                loaded = load_weekly_performance(
+                loaded = subflows.load_weekly_office_program_performance_flow(
                     current_week,
                     transformed["rows"],
                     transformed["rejections"],
@@ -288,7 +325,7 @@ def weekly_office_program_performance_flow(
                 "records_rejected": totals["records_rejected"],
                 "warnings": sorted(set(warnings)),
             }
-            snapshot_state = write_eval_snapshot(
+            snapshot_state = subflows.publish_weekly_performance_snapshot_flow(
                 run_id=run_id,
                 week_start=targets[-1].isoformat(),
                 summary=summary,
@@ -312,6 +349,7 @@ def weekly_office_program_performance_flow(
                 week: payload.get("week_fingerprint")
                 for week, payload in reconciliation["weeks"].items()
             }
+            reconciliation["recomputed_weeks"] = recomputed_weeks
             reconciliation["currencies"] = dict(OFFICE_CURRENCY)
             record_pipeline_run(
                 run_id,
@@ -326,15 +364,32 @@ def weekly_office_program_performance_flow(
                     "records_loaded": totals["records_loaded"],
                     "source_event_counts": dict(source_counts),
                     "office_counts": dict(office_counts),
+                    "supersedes_run_id": supersedes_run_id,
                     "reconciliation": reconciliation,
                 },
             )
+
+            alert_state = alert_weekly_performance_flow(
+                {
+                    "pipeline_name": PIPELINE_NAME,
+                    "run_id": run_id,
+                    "status": status,
+                    "warnings": sorted(set(warnings)),
+                    "error": None,
+                },
+                return_state=True,
+            )
+            if alert_state.is_failed():
+                logger.warning("optional alert delivery failed")
+
             return {
                 "status": status,
                 "run_id": run_id,
                 "target_weeks": [week.isoformat() for week in targets],
                 "records_loaded": totals["records_loaded"],
                 "warnings": sorted(set(warnings)),
+                "recomputed_weeks": list(recomputed_weeks),
+                "supersedes_run_id": supersedes_run_id,
                 "pipeline_name": PIPELINE_NAME,
             }
         except Exception as error:
@@ -354,9 +409,11 @@ def weekly_office_program_performance_flow(
                             "records_loaded": totals["records_loaded"],
                             "source_event_counts": dict(source_counts),
                             "office_counts": dict(office_counts),
+                            "supersedes_run_id": supersedes_run_id,
                             "reconciliation": {
                                 "weeks": reconciliation["weeks"],
                                 "warnings": sorted(set(warnings)),
+                                "recomputed_weeks": recomputed_weeks,
                             },
                             "error_code": code,
                             "error_message": message,
@@ -366,4 +423,14 @@ def weekly_office_program_performance_flow(
                     logger.exception(
                         "pipeline failure could not be written to pipeline_runs"
                     )
+                alert_weekly_performance_flow(
+                    {
+                        "pipeline_name": PIPELINE_NAME,
+                        "run_id": run_id,
+                        "status": "failed",
+                        "warnings": sorted(set(warnings)),
+                        "error": {"code": code, "message": message},
+                    },
+                    return_state=True,
+                )
             raise

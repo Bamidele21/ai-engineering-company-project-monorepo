@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -18,6 +18,30 @@ from data.process.weekly_performance.constants import (
 from data.process.weekly_performance.normalize import raw_source_counts
 
 _EVENT_TYPES_SQL = ", ".join(f"'{event}'" for event in sorted(ALLOWED_EVENT_TYPES))
+
+
+def _iso_timestamp(value: Any) -> str:
+    """Serialize a source timestamp as aware UTC.
+
+    PostgreSQL ``timestamptz`` returns aware datetimes. SQLite test engines can
+    return either naive datetimes or raw strings for the same column; both are
+    UTC by contract, so naive values are assumed UTC here and serialized with
+    an offset.
+    """
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, str):
+        text_value = value.strip()
+        try:
+            parsed = datetime.fromisoformat(text_value)
+        except ValueError:
+            return text_value
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    return str(value)
 
 
 @dataclass
@@ -39,9 +63,7 @@ class ExtractResult:
             "raw_rows": [
                 {
                     **row,
-                    "timestamp": row["timestamp"].isoformat()
-                    if isinstance(row["timestamp"], datetime)
-                    else str(row["timestamp"]),
+                    "timestamp": _iso_timestamp(row["timestamp"]),
                 }
                 for row in self.raw_rows
             ],
@@ -67,6 +89,9 @@ def _coerce_tags(value: Any) -> dict[str, Any]:
 def extract_week(engine: Engine, week_start: date) -> ExtractResult:
     """Read the four allowlisted event types for one UTC week, read-only."""
     window_start, window_end = week_bounds(week_start)
+    # PostgreSQL uses the public schema; SQLite test engines keep the source
+    # tables in the default schema, so qualify only on PostgreSQL.
+    table_prefix = "public." if engine.dialect.name == "postgresql" else ""
     rows_sql = text(
         f"""
         SELECT
@@ -75,7 +100,7 @@ def extract_week(engine: Engine, week_start: date) -> ExtractResult:
             service,
             event_type,
             tags
-        FROM public.telemetry_events
+        FROM {table_prefix}telemetry_events
         WHERE service = :service
           AND event_type IN ({_EVENT_TYPES_SQL})
           AND timestamp >= :window_start
@@ -105,20 +130,20 @@ def extract_week(engine: Engine, week_start: date) -> ExtractResult:
     ]
 
     dimension_sql = text(
-        """
+        f"""
         SELECT
             lower(trim(a.office)) AS office,
             trim(p.slug) AS programme_id
-        FROM public.assets AS a
-        JOIN public.programmes AS p ON p.id = a.programme_id
+        FROM {table_prefix}assets AS a
+        JOIN {table_prefix}programmes AS p ON p.id = a.programme_id
         WHERE a.office IS NOT NULL AND p.slug IS NOT NULL
         GROUP BY 1, 2
         """
     )
     known_sql = text(
-        """
+        f"""
         SELECT trim(slug) AS slug
-        FROM public.programmes
+        FROM {table_prefix}programmes
         WHERE slug IS NOT NULL AND trim(slug) <> ''
         """
     )

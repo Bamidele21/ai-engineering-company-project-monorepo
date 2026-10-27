@@ -1,6 +1,6 @@
 """Reusable pure transformation logic for the weekly performance pipeline."""
 
-from .aggregate import AggregateResult, aggregate_events, build_week_fingerprint
+from .aggregate import AggregateResult, assemble_week, build_week_fingerprint
 from .constants import (
     ALLOWED_EVENT_TYPES,
     INBOUND_EVENT,
@@ -27,6 +27,14 @@ from .errors import (
     PublicationBlockedError,
     SchemaUnavailableError,
 )
+from .kpi import (
+    compute_total_material_cost,
+    count_cost_variance_events,
+    count_kits_delivered,
+    count_shortage_events,
+    pair_key,
+    split_pair,
+)
 from .normalize import (
     DedupResult,
     NormalizationResult,
@@ -36,7 +44,7 @@ from .normalize import (
     normalize_rows,
     raw_source_counts,
 )
-from .transform import TransformResult, transform_week
+from .transform import ValidatedInput, validate_and_dedupe
 
 __all__ = [
     "ALLOWED_EVENT_TYPES",
@@ -62,15 +70,21 @@ __all__ = [
     "SHORTAGE_EVENT",
     "SchemaUnavailableError",
     "TRANSFORMATION_VERSION",
-    "TransformResult",
     "VARIANCE_EVENT",
-    "aggregate_events",
+    "ValidatedInput",
+    "assemble_week",
     "build_week_fingerprint",
+    "compute_total_material_cost",
+    "count_cost_variance_events",
+    "count_kits_delivered",
+    "count_shortage_events",
     "deduplicate_rows",
     "most_recent_complete_week",
     "normalize_rows",
+    "pair_key",
     "raw_source_counts",
-    "transform_week",
+    "split_pair",
+    "validate_and_dedupe",
     "week_bounds",
     "week_start_for",
 ]

@@ -1,0 +1,13 @@
+{
+  "records_deduplicated": 58,
+  "records_extracted": 58,
+  "records_loaded": 5,
+  "records_rejected": 0,
+  "run_id": "23a2b005-f06c-4b32-a98b-06710104b260",
+  "target_weeks": [
+    "2026-10-19"
+  ],
+  "warnings": [
+    "unknown_programme_ids"
+  ]
+}
