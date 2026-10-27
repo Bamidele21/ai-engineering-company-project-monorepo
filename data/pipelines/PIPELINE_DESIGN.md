@@ -1,7 +1,7 @@
 # Nexova Business Performance Data Pipeline — Design
 
 **Working title:** `performance-ETL-design.md`
-**Status:** Proposed. Design only (Part 1 of 3). No orchestration code is implemented in this milestone.
+**Status:** Sprint 1 implemented on 2026-10-27 (`pipeline.py`, reporting schema/API, worker deployment). See section 22 for the delivered decisions and evidence pointers.
 **Date:** 2026-10-26
 **Owner:** Nexova AI Engineering team
 **Audience:** Engineering, Laura Mendoza (CEO), Elena Vargas (L&D)
@@ -1340,3 +1340,43 @@ For the week starting Monday 2026-07-13, the endpoint returns six rows for two o
 ---
 
 *Design prepared for the Nexova business performance pipeline, Part 1 of 3. Implementation follows in Part 2.*
+
+---
+
+## 22. Sprint 1 implementation decisions (2026-10-27)
+
+The design above remains the architecture. This section records the decisions and concrete implementation choices that landed with Sprint 1.
+
+### 22.1 Delivered topology
+
+1. `data/pipelines/pipeline.py` is the CLI and the Prefect deployment entrypoint. It exposes `weekly_office_program_performance_flow`.
+2. The four designed task names are unchanged: `extract_weekly_telemetry`, `transform_weekly_performance`, `load_weekly_performance`, and `record_pipeline_run`.
+3. `write_eval_snapshot` is the optional task. The flow invokes it with `return_state=True`; an injected failure records `eval_snapshot_failed` and does not fail an otherwise valid publication.
+4. Pure deduplication, validation, aggregation, zero-fill, and reconciliation live in `data/process/weekly_performance/` and have no database or Prefect imports.
+5. HTTP concerns live in `backrooms/services/reporting/`; they import `data/pipelines/weekly_office_program_performance/{queries,status,triggers}.py`. The pipeline package does not import the reporting API.
+
+### 22.2 Runtime and dependencies
+
+1. `data/pipelines/pyproject.toml` owns the worker environment: Prefect 3, SQLAlchemy, psycopg2, python-dotenv, and httpx.
+2. `httpx` is a backend runtime dependency because the manual trigger uses the Prefect REST API rather than importing the Prefect SDK into the API image.
+3. The Inventory API image receives `./data` as a read-only Compose mount so `services.reporting` can import `data.pipelines`.
+4. The Compose stack adds `prefect-server` and `prefect-worker` services. The worker registers the `nexova-data-pipelines` process pool and the `weekly-office-program-performance` deployment, which uses `0 2 * * 1` UTC and concurrency 1.
+
+### 22.3 Resilience behavior
+
+1. Database tasks use three retries with delays of 30, 120, and 300 seconds. Deterministic validation, constraint, and programming failures are not retried.
+2. The transformation task caches for one hour. Its `cache_key_fn` hashes the target week, normalized source rows, dimension scaffold, known programmes, rejection threshold, and transformation version. `run_id`, credentials, and connection objects are excluded. Result persistence is enabled on the task.
+3. The advisory lock uses a dedicated session-mode connection. When `DATABASE_URL` uses the Supabase transaction pooler on port 6543, the lock URL is derived by switching to port 5432. If that connection cannot be established, the flow logs a warning and relies on the active-run partial unique index and Prefect concurrency limit.
+4. The API creates the queued `pipeline_runs` row and passes its `run_id` in the Prefect parameters. The worker adopts that row instead of creating a second active row.
+5. Stale queued/running rows (no heartbeat for 15 minutes) are marked `failed` with `error_code='stale_run'` before a new run starts.
+6. The publication gate is: any rejection warns; more than 5% of extracted rows blocks the week; count or currency reconciliation failure blocks the week; zero denominators do not trigger the percentage gate.
+7. The load is one transaction per week. KPI upserts preserve `id` and refresh `computed_at`; quarantine inserts are idempotent per `(run_id, event_id, event_type, reason)`.
+8. The default report week is the greatest published `week_start`, so recomputing an older week does not move the default backwards.
+
+### 22.4 Commands and verification
+
+1. CLI: `python data/pipelines/pipeline.py` (last two complete weeks) or `--week-start YYYY-MM-DD --weeks N`.
+2. Isolated tests: `python -m pytest tests/pipelines/test_pipeline.py`.
+3. Worker project tests: `uv run pytest -q` from `data/pipelines`.
+4. PostgreSQL integration tests use `TEST_DATABASE_URL` and are marked `postgres`.
+5. Evidence: `data/eval/weekly_performance/sprint1-report.md`.

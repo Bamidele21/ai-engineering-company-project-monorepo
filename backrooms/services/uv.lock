@@ -63,6 +63,7 @@ source = { editable = "." }
 dependencies = [
     { name = "dotenv" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
     { name = "libpass", extra = ["bcrypt"] },
     { name = "pandas" },
     { name = "psycopg2-binary" },
@@ -76,7 +77,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -85,6 +85,7 @@ dev = [
 requires-dist = [
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.116.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "libpass", extras = ["bcrypt"], specifier = ">=1.9.3" },
     { name = "pandas", specifier = ">=3.1.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.13" },
@@ -98,7 +99,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
 ]

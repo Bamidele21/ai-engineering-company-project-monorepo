@@ -55,10 +55,50 @@ services:
       - .env
     environment:
       WATCHFILES_FORCE_POLLING: "true"
+      # Container-to-container Prefect API; do not use localhost here.
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_DEPLOYMENT_NAME: weekly-office-program-performance
     volumes:
       - ./backrooms/services:/app/backrooms/services
+      # The reporting router imports data.pipelines from the repository root.
+      - ./data:/app/data:ro
     # Same image, different app entrypoint and port.
     command: sh -c "cd /app/backrooms/services/Inventory-API && uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
+    depends_on:
+      - prefect-server
+    networks:
+      - nexova-net
+
+  prefect-server:
+    build:
+      context: .
+      dockerfile: data/pipelines/Dockerfile
+    command: prefect server start --host 0.0.0.0 --port 4200
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-data:/root/.prefect
+    networks:
+      - nexova-net
+
+  prefect-worker:
+    build:
+      context: .
+      dockerfile: data/pipelines/Dockerfile
+    command: python data/pipelines/start_worker.py
+    env_file:
+      - .env
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_DEPLOYMENT_NAME: weekly-office-program-performance
+      PREFECT_WORK_POOL: nexova-data-pipelines
+      PREFECT_RESULTS_PERSIST_BY_DEFAULT: "true"
+      PREFECT_LOCAL_STORAGE_PATH: /app/.prefect-results
+    volumes:
+      - ./data:/app/data
+      - prefect-results:/app/.prefect-results
+    depends_on:
+      - prefect-server
     networks:
       - nexova-net
 
@@ -66,3 +106,7 @@ networks:
   nexova-net:
     name: nexova-net
     driver: bridge
+
+volumes:
+  prefect-data:
+  prefect-results:

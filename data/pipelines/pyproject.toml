@@ -1,0 +1,24 @@
+[project]
+name = "nexova-weekly-performance-pipeline"
+version = "0.1.0"
+description = "Nexova weekly office and programme performance ETL pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "prefect>=3",
+    "psycopg2-binary>=2.9",
+    "python-dotenv>=1.0",
+    "sqlalchemy>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["weekly_office_program_performance/tests"]
+markers = [
+  "postgres: requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database",
+]

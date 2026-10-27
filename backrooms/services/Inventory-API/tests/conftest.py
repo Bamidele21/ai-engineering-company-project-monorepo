@@ -17,7 +17,8 @@ import pytest
 
 INVENTORY_ROOT = Path(__file__).resolve().parent.parent
 BACKROOMS_ROOT = INVENTORY_ROOT.parent.parent
-for candidate in (INVENTORY_ROOT, BACKROOMS_ROOT):
+REPO_ROOT = BACKROOMS_ROOT.parent
+for candidate in (INVENTORY_ROOT, BACKROOMS_ROOT, REPO_ROOT):
 	if str(candidate) not in sys.path:
 		sys.path.insert(0, str(candidate))
 
@@ -35,6 +36,9 @@ import main as inventory_main  # noqa: E402
 from models import Programme  # noqa: E402
 from routers import inventory as inventory_routes  # noqa: E402
 from services.telemetry import router as telemetry_routes  # noqa: E402
+from data.pipelines.weekly_office_program_performance.schema import (  # noqa: E402
+	reporting_metadata,
+)
 
 
 @pytest.fixture()
@@ -56,12 +60,14 @@ def sqlite_engine():
 	)
 
 	@event.listens_for(engine, "connect")
-	def _enable_foreign_keys(dbapi_connection, _record):
+	def _configure_sqlite(dbapi_connection, _record):
 		cursor = dbapi_connection.cursor()
 		cursor.execute("PRAGMA foreign_keys=ON")
+		cursor.execute("ATTACH DATABASE ':memory:' AS reporting")
 		cursor.close()
 
 	SQLModel.metadata.create_all(engine)
+	reporting_metadata.create_all(engine)
 	try:
 		yield engine
 	finally:

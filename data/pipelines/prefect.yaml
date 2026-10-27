@@ -1,0 +1,29 @@
+# Prefect deployment for the Nexova weekly performance pipeline.
+# Apply from the repository root with:
+#   prefect work-pool create nexova-data-pipelines --type process --overwrite
+#   prefect deploy --all --no-prompt
+name: nexova-data-pipelines
+prefect-version: 3.9.0
+
+deployments:
+  - name: weekly-office-program-performance
+    version: "1.0"
+    description: >-
+      Weekly office and programme performance report sourced from
+      public.telemetry_events and loaded into reporting schema tables.
+    tags:
+      - nexova
+      - reporting
+      - weekly-performance
+    entrypoint: data/pipelines/pipeline.py:weekly_office_program_performance_flow
+    parameters:
+      weeks: 2
+    work_pool:
+      name: nexova-data-pipelines
+      work_queue_name: default
+      job_variables: {}
+    schedules:
+      - cron: "0 2 * * 1"
+        timezone: UTC
+        active: true
+    concurrency_limit: 1
