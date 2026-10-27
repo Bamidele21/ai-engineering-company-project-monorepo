@@ -1,5 +1,204 @@
 # Progress
 
+# Container fix — backend image carries data/ and the worker venv survives (2026-10-27)
+
+Scope changed:
+1. `backrooms/services/Dockerfile` — now copies `data/` into the backend image; the Compose build context for both backend services moved to the repository root.
+2. `docker-compose.yml` — removed the `./data` bind mount from `prefect-worker` (it shadowed the image's Linux virtualenv with the Windows host copy and broke the `prefect` binary on PATH).
+3. `.dockerignore` — now excludes `.env` files, the TinyDB auth store, caches, and build artifacts so no secrets reach any image.
+
+What changed:
+1. The backend image is now self-sufficient for the reporting module's `data.pipelines` import; standalone `docker run` works without the Compose mount.
+2. The worker container runs the image's own Linux virtualenv for Prefect.
+
+Validation performed:
+1. Built both images with the Docker daemon running (`nexova-backend-test`, `nexova-worker-test`).
+2. Inside the backend image: `from services.reporting.service import get_report, get_latest_run, trigger_run` succeeds; Inventory API main import succeeds with a dummy `DATABASE_URL`; all three `/reporting` paths appear in OpenAPI; `find` confirms no `.env`, `suppliers_db.json`, or `password_resets_db.json` in the image.
+3. Inside the worker image: the exact `from data.pipelines.weekly_office_program_performance import queries, status, triggers` import succeeds; CLI help renders; a full ETL run against the live database completed (5 rows, subflows, unchanged recompute).
+4. `docker compose build` built all five images; `up -d` started the stack; suppliers-api (8000), inventory-api (8001), and prefect-server (4200) return 200; the worker registered `nexova-data-pipelines` and the deployment; the UI serves on 3000/3001.
+5. Through the stack: authenticated KPI read 200 with 5 entries, regular-user trigger 403, and a deployment run (`c55faad7-5f60-4b8e-859c-a8bc48948fa4`) executed by the container worker (58 extracted, 5 loaded, error null).
+6. `docker compose config -q` passed. The stack was left running at the end of the session.
+
+Remaining risks / notes:
+1. A stale `next start` process from the browser check held port 3000; it was stopped before starting the UI container.
+2. The UI container serves both apps on 3000 (website) and 3001 (backoffice) per `uis/start.sh`.
+
+# Sprint 2 — subflows, isolated KPI tests, and business dashboard (2026-10-27)
+
+Scope changed:
+1. `data/pipelines/weekly_office_program_performance/subflows.py` (new) — the three critical subflows plus the optional snapshot subflow.
+2. `data/pipelines/weekly_office_program_performance/flow.py` — the main flow now coordinates the subflows; added `resume_from`, late-event supersession (fingerprint comparison, `recomputed_weeks`, `supersedes_run_id`), and the non-critical alert subflow.
+3. `data/pipelines/weekly_office_program_performance/tasks.py` — `transform_weekly_performance` is now the cached validation/normalization boundary; four domain KPI tasks added (`compute_total_material_cost`, `count_kits_delivered`, `count_shortage_events`, `count_cost_variance_events`).
+4. `data/process/weekly_performance/kpi.py` (new) — pure per-KPI functions with explicit malformed-input rejection; `transform.py` now exposes `validate_and_dedupe`; `aggregate.py` now exposes `assemble_week`.
+5. `data/pipelines/weekly_office_program_performance/monitoring.py` (new) — freshness/silence/baseline health checks, the health flow, and the optional alert subflow.
+6. `data/pipelines/weekly_office_program_performance/run_log.py` — `previous_publication`, `plan_resume`, `decode_target_weeks`, `supersedes_run_id` support, and a `finalize_run` default-fields fix.
+7. `data/pipelines/weekly_office_program_performance/extract.py` — dialect-aware source SQL (Postgres `public.` prefix, SQLite default schema) and UTC timestamp normalization for SQLite values.
+8. `data/pipelines/pipeline.py` — `--resume-from` and `--health-check` flags.
+9. `tests/pipelines/test_pipeline.py` (rewritten) — 22 isolated tests calling the KPI task `.fn` implementations, including the four required hand-calculated cases and defensive/edge coverage.
+10. `data/pipelines/weekly_office_program_performance/tests/` — SQLite flow suite (`test_subflows.py` 13 tests, `test_monitoring.py` 9 tests, `test_prefect_behavior.py` updated) plus two new PostgreSQL tests (late-event replacement, multi-week resume).
+11. `uis/backoffice/lib/reporting.ts`, `lib/__tests__/reporting.test.ts`, `app/reporting/page.tsx` (new) — typed client, malformed-response validation, week helpers, currency formatting, and the four-table dashboard; `BackofficeShell.tsx` gained the Reporting navigation entry.
+12. `data/pipelines/RUNBOOK.md` (new), `data/pipelines/PIPELINE_DESIGN.md` sections 22.5/22.6, `data/pipelines/README.md`, env examples — subflow topology, monitoring rationale (questions 16.4/16.7/16.10), and operating instructions.
+13. `data/eval/weekly_performance/sprint2-report.md`, `sprint2-dashboard.png` (new) — sanitized evidence.
+
+What changed:
+1. The main flow invokes `extract_weekly_office_program_telemetry_flow`, `transform_weekly_office_program_performance_flow`, `load_weekly_office_program_performance_flow`, and optional `publish_weekly_performance_snapshot_flow` (with `return_state=True`), preserving retries, the one-hour cache, locks, audit identity, atomic loads, and the CLI.
+2. The transform subflow runs the four KPI tasks over the cached validated input and then assembles, zero-fills, and reconciles.
+3. Resume skips committed weeks and recomputes the failed one; late events record `recomputed_weeks` and `supersedes_run_id`; unchanged recomputes supersede nothing; fingerprints cover all KPI values, dimensions, and event identities.
+4. The health flow detects missed runs (8 days), failed runs, stale heartbeats, rejection/reconciliation warnings, unexpected and one-sided office silence, and labels insufficient baselines; alert delivery is a non-critical subflow.
+5. The `/reporting` dashboard renders the four exact KPI tables, the returned UTC week, a 12-week completed-Monday selector, per-row EUR/USD money without cross-currency totals, and explicit loading/error/no-report/zero-activity states with a stale-response guard.
+
+Validation performed:
+1. `python -m pytest tests/pipelines/test_pipeline.py` under the worker environment: 22 passed.
+2. `uv run pytest -q` from `data/pipelines`: 24 passed, 6 skipped (PostgreSQL marker) in 1:44.
+3. Disposable PostgreSQL 17 integration suite: 8 passed.
+4. `uv run pytest -q` from `backrooms/services`: 238 passed (2 pre-existing deprecation warnings).
+5. `npx jest --runInBand` from the repo root: 117 passed across 15 suites (24 new reporting tests).
+6. `npm run lint` and `npm run build` in `uis/backoffice`: passed; `/reporting` generated (stale `.next/dev/types` cache cleared before the successful build).
+7. Live CLI `python data/pipelines/pipeline.py`: subflow topology executed for both target weeks; run `e9147269-0563-4e20-96ab-4f2c50c4c848` loaded 8 rows, `recomputed_weeks` empty, no supersession.
+8. Live `--health-check`: 1 reconciliation warning alert, `baseline_status=available`, `prior_completed_runs=4`.
+9. Live trigger: `POST /reporting/pipeline-runs` 202; worker adopted run `23a2b005-f06c-4b32-a98b-06710104b260` (`flow_run_id=0807a191-13de-418d-bfb6-0dbbd6cebd4a`), 58 extracted, 5 loaded; authenticated KPI read 200.
+10. Headless Chrome (CDP) rendered real KPI values for 2026-10-19, the zero week 2026-10-12 with the computed-zero card, the 404 week 2026-10-05 with the required wording, and restored 2026-10-19 after reselection; screenshot saved to `data/eval/weekly_performance/sprint2-dashboard.png`.
+11. `git diff --check` passed (LF-to-CRLF notices only); no protected path modified; source telemetry unchanged.
+
+Remaining risks / notes:
+1. Docker Desktop's daemon was unavailable, so image builds and container runtime checks were not executed; Compose config validates and the local server/worker replicated the topology.
+2. No wall-clock scheduler tick was awaited; the manual API trigger exercised the same worker/deployment path.
+3. Live late-event/resume demonstrations ran on the SQLite flow suite and the disposable PostgreSQL cluster rather than production rows.
+4. `REPORTING_ALERTS_WEBHOOK` was unset during validation, so live alert delivery returned `skipped:no_webhook`; the delivery path is unit-covered.
+5. `memory-bank/projectbrief.md` remains stale (pre-existing).
+
+# Sprint 1 — resilient weekly performance pipeline and reporting API (2026-10-27)
+
+Scope changed:
+1. `data/pipelines/pipeline.py`, `data/pipelines/prefect.yaml`, `data/pipelines/Dockerfile`, `data/pipelines/start_worker.py`, `data/pipelines/pyproject.toml`, `data/pipelines/uv.lock`, `data/pipelines/.env.example`, `data/pipelines/conftest.py` (new).
+2. `data/pipelines/weekly_office_program_performance/` (new) — config, schema, db, extract, load, run log, queries, status, triggers, tasks, flow, and tests.
+3. `data/process/weekly_performance/` (new) — pure constants, errors, normalization, aggregation, and transformation.
+4. `backrooms/services/reporting/` (new) — router, service, models, storage, migration, and package bootstrap.
+5. `backrooms/services/Inventory-API/main.py`, `database.py`, `tests/conftest.py`, `tests/test_reporting_api.py` — reporting router/schema wiring and endpoint tests.
+6. `tests/pipelines/test_pipeline.py`, `tests/conftest.py` (new) — isolated KPI tests.
+7. `backrooms/services/pyproject.toml`, `uv.lock`, `requirements.txt` — `httpx` promoted to a runtime dependency; reporting coverage added.
+8. `docker-compose.yml`, `.dockerignore`, `.env.example`, `Inventory-API/.env.example`, `.gitignore` — pipeline data mount, Prefect server/worker services, and configuration examples.
+9. `data/pipelines/PIPELINE_DESIGN.md`, `data/pipelines/README.md` — implementation status, Sprint 1 decisions, and run instructions.
+10. `data/eval/weekly_performance/sprint1-report.md` (new) — sanitized validation evidence.
+
+What changed:
+1. Implemented the four designed Prefect tasks with explicit I/O, three retries (30/120/300 s) for external I/O, one-hour transform caching keyed by week/input/dimensions/version, and optional `write_eval_snapshot` invoked with `return_state=True`.
+2. Implemented extraction from `public.telemetry_events` for the four allowlisted `inventory-api` events, dimension reads from `public.assets`/`public.programmes`, pure deduplication/validation/aggregation/zero-fill/reconciliation, and one-transaction-per-week upserts into `reporting.weekly_office_program_performance`.
+3. Added `reporting.pipeline_runs` and `reporting.pipeline_rejected_events`, the active-run unique index, stale-run recovery, checkpoints, heartbeats, quarantine idempotency, and RLS/revokes.
+4. Added the reporting API with bearer reads, manager/admin manual triggers, 202 dispatch through the Prefect REST API, API-created run adoption, and explicit 404/409/422/503 handling.
+5. Added the `nexova-data-pipelines` process pool and `weekly-office-program-performance` deployment (`0 2 * * 1` UTC, concurrency 1, `weeks=2`), plus Compose services and a repo-root data mount for the API.
+6. Added 16 isolated KPI tests, 12 reporting API tests, 2 real Prefect cache/state tests, and 6 PostgreSQL integration tests.
+
+Validation performed:
+1. `python -m pytest tests/pipelines/test_pipeline.py` under the worker environment: 16 passed.
+2. `uv run pytest -q` from `backrooms/services`: 238 passed (2 pre-existing deprecation warnings), including the 12 new reporting endpoint tests and existing telemetry regressions.
+3. `uv run pytest -q` from `data/pipelines`: 2 passed, 6 skipped (PostgreSQL marker) in 19.71 s.
+4. Disposable PostgreSQL 17 integration suite: 6 passed, covering JSONB extraction, upsert identity/idempotency, mid-load rollback, active-run uniqueness, advisory locking, and migration idempotency/RLS.
+5. Live CLI: `python data/pipelines/pipeline.py` loaded 8 rows across 2026-10-12 (3 zero rows) and 2026-10-19 (5 rows); an explicit-week run loaded 5. Repeated runs preserved the five KPI row IDs and found zero duplicates; `transform_weekly_performance` was `Cached(type=COMPLETED)`.
+6. Live KPI reconciliation for 2026-10-19: 58 extracted/deduplicated, 0 rejected; source counts 35 inbound, 19 outbound, 3 threshold, 1 variance; KPI totals 4403.00 material cost, 19 kits, 3 shortages, 1 variance. `test-programme` remained visible with an `unknown_programme_ids` warning.
+7. Optional failure: `--fail-snapshot` produced `eval_snapshot_failed` while the flow completed and published.
+8. Live endpoints: authenticated KPI GET 200 (5 entries, numeric money), unauthenticated 401, latest-run GET 200, manager POST 202, worker adopted `run_id=7b03703b-49bb-4614-b331-05bfe26859f7` / `flow_run_id=f8d2c723-d4d4-423f-80ef-495f69a9be77`, status `completed_with_warnings`, 58 extracted, 5 loaded, error null; authenticated KPI read after completion 200.
+9. `docker compose config -q`, `git diff --check`, and protected-path checks passed; `public.telemetry_events` remained 65 rows (60 inventory-api + 5 backoffice) and no source row changed.
+
+Remaining risks / notes:
+1. Docker Desktop's daemon was unavailable, so Compose image builds and container runtime checks were not executed; PostgreSQL integration used a disposable local PostgreSQL 17 cluster and Prefect ran as a local server/worker process.
+2. The deployment schedule was inspected but no wall-clock scheduler tick was awaited; the manual API trigger exercised the same worker/deployment path.
+3. Live data contains one completed activity week, so the two-week default includes an empty week handled by dimension zero-fill.
+4. The tracked `data/pipelines/ETL-plan-context.md` is deleted and `docs/ETL/` contains context copies; this move does not belong to the implementation and was left untouched.
+5. `memory-bank/projectbrief.md` remains stale (pre-existing).
+
+# ETL two-sprint implementation plan (2026-10-26)
+
+Scope changed:
+1. `data/pipelines/ETL_SPRINT_PLAN.md` (new) — implementation backlog based on both ETL contexts, `PIPELINE_DESIGN.md`, and `ETL-company-Briefing.md`.
+
+What changed:
+1. Sprint 1 covers the resilient Prefect ETL, exact KPI schema/calculations, one-hour transform caching, optional-task failure tolerance, idempotent loads, run logging, CLI, three reporting endpoints, and worker/schedule integration.
+2. Sprint 2 covers at least three reusable domain-named subflows, an optional snapshot subflow, isolated transformation-task tests at `tests/pipelines/test_pipeline.py`, the mandatory `/reporting` backoffice dashboard, and operational recovery/observability verification.
+3. Added sequenced work items, dependencies, suggested ownership, acceptance gates, validation commands, hand-calculated KPI examples, and a requirement traceability matrix for both contexts.
+4. Flagged implementation decisions including session advisory locks versus transaction pooling, cache invalidation for late data, API-created run adoption, data-quality thresholds, and the design's earlier entrypoint/test-layout differences.
+
+Validation performed:
+1. Reviewed both contexts' requirement/evaluation checklists against the plan. `etl-context2.md` was initially empty, then saved by the user and re-read; the final plan incorporates its subflow, isolated-test, and mandatory dashboard requirements.
+2. Confirmed the plan preserves the exact required CLI and pytest commands, all three endpoint paths, four KPI names/semantics, destination grain, UTC cadence, and currency separation.
+3. `git diff --no-index --check -- NUL "data/pipelines/ETL_SPRINT_PLAN.md"` passed with only the repository LF-to-CRLF notice.
+4. Documentation-only exemption under `.agents/rules/test-coverage.md` exception #1: no functional behavior changed, so application tests were not run.
+5. No protected path was edited; the user's two source context files were preserved.
+
+Remaining risks / notes:
+1. Implementation is future work. Two two-week sprints assume shared pipeline/backend/frontend capacity and require re-estimation for a single implementer.
+2. Kickoff decisions are listed in the plan; the existing design itself was not rewritten during planning.
+3. `memory-bank/projectbrief.md` remains stale, and `techContext.md` incorrectly calls the populated root context a placeholder; the current ETL sources guided this plan.
+
+# Business Performance Pipeline design (2026-10-26)
+
+Scope changed:
+1. `data/pipelines/PIPELINE_DESIGN.md` (new) — design document for the weekly business performance pipeline. No orchestration code, migrations, tests, or dependencies were added.
+
+What changed:
+1. Documented the current telemetry state and the business gap: `public.telemetry_events` captures the four required inventory events, but the existing `GET /telemetry/report` and `backrooms/services/telemetry/analysis.py` only answer engineering volume, error-share, and page-load questions.
+2. Defined the purpose and four KPIs from `ETL-company-Briefing.md`: weekly material cost per office/programme, kits delivered, shortage frequency, and cost-variance frequency, with the grain `(office, programme_id, week_start)` and Monday UTC weeks.
+3. Specified extraction from `public.telemetry_events` (four event types, `service='inventory-api'`, UTC windows), dedup by `tags._meta.eventId`, validation/quarantine, zero-fill from the real office/programme spine, and no currency conversion.
+4. Specified the exact `reporting.weekly_office_program_performance` DDL from the briefing, the idempotent `ON CONFLICT (office, programme_id, week_start)` upsert, and the full-week transactional recompute after a load failure.
+5. Designed the `reporting.pipeline_runs` execution log (26 fields with justification) and `reporting.pipeline_rejected_events` quarantine table, including heartbeats, checkpoints, concurrency locks, stale-run recovery, and late-event recompute/backfill.
+6. Mapped the pipeline to Prefect: `weekly_office_program_performance_flow`, four tasks, states, blocks, a Monday 02:00 UTC schedule, and an optional daily reconcile deployment.
+7. Designed the new `backrooms/services/reporting/` module (the monorepo implementation of the milestone's logical `services/reporting/`) with the three required endpoints and their `data/pipelines/` functions, plus the Docker/Compose and import-path changes the implementation will need.
+8. Added observability, reconciliation, security/PII rules, future test strategy, risks, and a milestone traceability matrix.
+
+Validation performed:
+1. Verified the design file exists at `data/pipelines/PIPELINE_DESIGN.md` with all required identifiers: destination table, three endpoint paths, four event types, `reporting.pipeline_runs`, Prefect flow/tasks, `week_start`, `EUR`, and `USD`.
+2. Compared the destination DDL against `ETL-company-Briefing.md` section 5: column names, types, defaults, and `unique (office, programme_id, week_start)` match exactly.
+3. Markdown structure check: 21 top-level sections, 44 balanced code fences, no TODO/TBD/FIXME placeholders, and no trailing whitespace.
+4. No protected path was modified. `git status --short` shows only the two untracked briefing/context files, the new design file, and this progress entry. `CONTEXT.md`, `company-choice.md`, `data/raw/**`, `infra/**`, `internal/**`, `mcps/**`, and `.env` are untouched.
+5. Documentation-only exemption under `.agents/rules/test-coverage.md` exception #1: no functional code changed, so no application tests are required.
+
+Remaining risks / notes:
+1. Implementation is future work in Part 2. The design flags the missing `received_at` ingestion timestamp, the Docker/Compose `./data` mount needed for `backrooms/services/reporting` to import `data.pipelines`, the `kits_delivered_count` semantic confirmation with Laura/Elena, and the no-cache default for the KPI endpoint.
+2. No commit was made. The design file and progress entry remain in the working tree for review.
+
+# Telemetry Sprint 3 — cached technical report and dashboard (2026-10-23)
+
+Scope changed:
+1. `backrooms/services/telemetry/analysis.py` (new) — SQL-to-Pandas pipeline with `events_per_day`, `error_rate_by_type`, and `page_load_latency_by_day`.
+2. `backrooms/services/telemetry/router.py` — `GET /telemetry/report`, UTC period resolution, 60-second result/default-window caches, and `503` database-failure handling.
+3. `backrooms/services/telemetry/models.py` — `ReportPeriod` and `TelemetryReportResponse`.
+4. `backrooms/services/telemetry/constants.py` — report cache TTL and default-window constants.
+5. `backrooms/services/pyproject.toml`, `uv.lock`, `requirements.txt` — added Pandas 3.1.0 with its NumPy/date dependencies. Developer approved this dependency change.
+6. `backrooms/services/telemetry/tests/test_analysis.py` (new) — metric happy/edge/failure coverage.
+7. `backrooms/services/Inventory-API/tests/test_telemetry_report.py` (new) — endpoint period, cache, and failure coverage.
+8. `backrooms/services/Inventory-API/tests/conftest.py` — clears the report/default-window caches per test.
+9. `uis/backoffice/lib/telemetry-report.ts` (new) — typed report contract and `fetchTelemetryReport()`.
+10. `uis/backoffice/app/telemetry/page.tsx` (new) — engineering dashboard with period picker, three metric tables, and loading/empty/error states.
+11. `uis/backoffice/lib/__tests__/telemetry-report.test.ts` (new) — report-fetch happy/edge/failure coverage.
+12. `uis/backoffice/components/backoffice/BackofficeShell.tsx` — added the Telemetry navigation entry.
+13. `docs/telemetry/telemetry-plan.md` — Sprint 3 period, cache, and metric-population contract.
+14. `docs/telemetry/sprint3-report.md` (new) — live-data report sample, cache evidence, technical-event evidence, and limitations.
+
+What changed:
+1. Added a pure Pandas analysis pipeline. Each metric filters `timestamp` and `event_type` in SQL, refines `tags`/types in Pandas, calls `pd.to_datetime(..., utc=True)` before grouping, and returns JSON-safe records. `error_rate_by_type` uses the full declared daily population as its denominator and stored `level='error'` as its numerator; warn-level business rejections are not counted as errors.
+2. Added `GET /telemetry/report` with optional ISO 8601 bounds, inclusive-start/exclusive-end UTC windows, a seven-day default, single-bound seven-day anchoring, `422` for malformed/reversed/empty ranges, and a typed `{ period, metrics }` response.
+3. Added a 60-second `TtlCache` keyed by the resolved `(start, end)` pair plus a 60-second cached resolved default window. Cache hits skip all pipeline calls; failures return `503` and are not cached.
+4. Added the `/telemetry` backoffice dashboard, reusing the existing inventory card/table styles, with date inputs, active period display, and per-metric tables.
+5. Generated a genuine technical event through the real backoffice: headless Chrome loaded `/login`, an uncaught `Error` was scheduled in the page, the existing telemetry error listener emitted `frontend_error_captured`, and `POST /telemetry/events` returned `200`. The row is stored at `level='error'` with a sanitised message. No telemetry row was fabricated.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 226 passed (2 pre-existing deprecation warnings).
+2. `npx jest --runInBand` from the repository root: 93 passed across 14 suites.
+3. `npm run lint` and `npm run build` in `uis/backoffice`: passed; `/telemetry` generated alongside the existing 16 routes.
+4. Live Supabase report: HTTP `200` with real business, navigation, error, and latency metrics. Final table count was 64 rows; `page_view` was 3 and `frontend_error_captured` was 1 (Oct 23 error share = 1/3).
+5. Live dashboard browser check: `/telemetry` rendered the real period and metric tables; the Inventory API log recorded `POST /telemetry/events` `200` and `GET /telemetry/report` `200`.
+6. `git diff --check`: repository LF-to-CRLF notices only.
+7. Protected paths: only the developer-approved `pyproject.toml`, `uv.lock`, and `requirements.txt` changed. No `.env`, `CONTEXT.md`, `infra/**`, `data/raw/**`, `internal/**`, or `mcps/**` edit was made.
+
+Remaining risks / notes:
+1. The report cache is process-local; multiple Uvicorn workers would each hold their own 60-second copy.
+2. `error_rate_by_type` is a captured-event error share, not a failed-request rate, and it excludes warn-level business rejections by design.
+3. The live page-load latency population is thin (three samples: `/inventory/products`, `/login`, `/telemetry`); the metric is honest but not yet a broad baseline.
+4. The optional `auth_failure_rate` metric remains unavailable because Sprint 1 deferred `login_succeeded` / `login_failed` capture. The optional dashboard was implemented.
+5. Pandas increases the backend image size; the Docker requirements export now includes Pandas, NumPy, `python-dateutil`, and `tzdata`.
+6. Duplicate telemetry rows remain possible by design; report metrics count stored rows, not unique `eventId` values.
+7. The Docker image was not rebuilt because the Docker daemon was unavailable in this session; `requirements.txt` was regenerated from the lockfile and includes Pandas/NumPy for the image build.
+
 # Telemetry Sprint 2 — validate individually and persist in Supabase (2026-10-21)
 
 Scope changed:

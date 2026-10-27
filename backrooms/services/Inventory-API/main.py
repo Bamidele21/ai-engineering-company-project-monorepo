@@ -19,7 +19,8 @@ from pathlib import Path
 # ``backrooms`` is on the path so ``services.Supply_directory_API`` is importable.
 BASE_DIR = Path(__file__).resolve().parent
 BACKROOMS_ROOT = BASE_DIR.parent.parent
-for candidate in (BASE_DIR, BACKROOMS_ROOT):
+REPO_ROOT = BACKROOMS_ROOT.parent
+for candidate in (BASE_DIR, BACKROOMS_ROOT, REPO_ROOT):
 	if str(candidate) not in sys.path:
 		sys.path.insert(0, str(candidate))
 
@@ -29,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import init_inventory_schema
 from routers.inventory import router as inventory_router
 from schemas import HealthResponse
+from services.reporting.router import router as reporting_router
 from services.telemetry.router import router as telemetry_router
 
 
@@ -59,6 +61,7 @@ app.add_middleware(
 
 app.include_router(inventory_router)
 app.include_router(telemetry_router)
+app.include_router(reporting_router)
 
 
 @app.get("/", response_model=HealthResponse)

@@ -4,6 +4,8 @@ from typing import Final
 
 SCHEMA_VERSION: Final = "1.0"
 INVENTORY_SOURCE: Final = "inventory-api"
+REPORT_CACHE_TTL_SECONDS: Final = 60
+REPORT_DEFAULT_WINDOW_DAYS: Final = 7
 
 OFFICE_CURRENCY: Final = {"valencia": "EUR", "miami": "USD"}
 

@@ -20,6 +20,8 @@ const NAV_ITEMS: NavItem[] = [
     icon: "04",
     match: "/inventory",
   },
+  { href: "/telemetry", label: "Telemetry", icon: "05", match: "/telemetry" },
+  { href: "/reporting", label: "Reporting", icon: "06", match: "/reporting" },
 ];
 
 function isActive(pathname: string, match: string): boolean {

@@ -362,6 +362,45 @@ The table is append-only: no application UPDATE or DELETE operations. The three 
 
 Duplicate delivery is accepted. Retries and Beacon can produce duplicate rows with the same `eventId`, and `stored` counts each row; Sprint 2 does not claim exactly-once storage and does not add a unique constraint. Future deduplication can use `tags._meta.eventId` without changing the envelope.
 
+### 5.2.3 Sprint 3 technical report
+
+`GET /telemetry/report` serves three engineering metrics from the persisted events. It is read-only and hosted by the Inventory API next to ingestion; no revenue, conversion, or executive KPI is calculated.
+
+**Period contract.** `start_date` and `end_date` are optional ISO 8601 values. One resolved UTC window is passed to every metric: inclusive start, exclusive end. With neither bound, the window is `now − 7 days → now`. With one bound, the window is seven days anchored to it (`start → start + 7d`, `end − 7d → end`). Malformed, reversed, or empty ranges return `422`; explicit offsets are normalised to UTC.
+
+**Cache.** Successful reports are cached for 60 seconds by the resolved `(start, end)` pair. Omitted-date requests reuse a cached resolved default window for its 60-second lifetime, so the response period is stable across hits. Failures are never cached; database failures return `503`. The cache is process-local (`services.cache.TtlCache`) and a report may be up to 60 seconds stale.
+
+**Metric populations.** Every function filters `timestamp` and `event_type` in SQL, refines types and `tags` dimensions in Pandas, converts timestamps with `pd.to_datetime(..., utc=True)` before grouping, and returns `.reset_index().to_dict(orient="records")`.
+
+| JSON key | Population | Aggregation |
+|---|---|---|
+| `events_per_day` | Catalogue `event_type`s inside the window | Count by UTC day and `event_type` |
+| `error_rate_by_type` | Catalogue `event_type`s inside the window; the denominator is the full declared population loaded in the same query | Counts by UTC day/type; `error_count` uses stored `level='error'`; `error_rate = error_count / daily_total` |
+| `page_load_latency_by_day` | `page_view` events with `tags.page_path` and `tags.load_duration_ms` | Mean milliseconds and sample count by UTC day/route; missing/invalid samples are dropped |
+
+`error_rate_by_type` is a **captured-event error share**, not a failed-request rate. Warn-level business rejections (`outbound_order_rejected`, `stock_threshold_triggered`, `kit_cost_variance_detected`) are not errors. `page_load_latency_by_day` reports observed document-load time; the `>= 500 ms` `api_latency_recorded` event is a sampled slow-request signal, not overall API latency.
+
+**Response shape.**
+
+```json
+{
+  "period": { "from": "2026-10-16T17:40:05.893188Z", "to": "2026-10-23T17:40:05.893188Z" },
+  "metrics": {
+    "events_per_day": [
+      { "date": "2026-10-22", "event_type": "inbound_order_created", "count": 35 }
+    ],
+    "error_rate_by_type": [
+      { "date": "2026-10-23", "event_type": "frontend_error_captured", "error_count": 1, "total_count": 1, "daily_total": 2, "error_rate": 0.5 }
+    ],
+    "page_load_latency_by_day": [
+      { "date": "2026-10-21", "page_path": "/inventory/products", "average_load_duration_ms": 742.0, "sample_count": 1 }
+    ]
+  }
+}
+```
+
+The optional authentication metric is not implemented: Sprint 1 deferred `login_succeeded` / `login_failed` capture, so there is no honest numerator or denominator. The optional `/telemetry` backoffice view is implemented as an engineering table view of the same endpoint, with period display and loading, empty, and error states.
+
 ### 5.3 Shared property dictionary
 
 | Property | Type | Rule |

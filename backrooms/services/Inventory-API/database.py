@@ -25,7 +25,8 @@ from sqlmodel import Session, SQLModel, create_engine
 # importable, which is how the TinyDB auth layer is reused.
 SERVICES_ROOT = Path(__file__).resolve().parent.parent
 BACKROOMS_ROOT = SERVICES_ROOT.parent
-for candidate in (SERVICES_ROOT, BACKROOMS_ROOT):
+REPO_ROOT = BACKROOMS_ROOT.parent
+for candidate in (SERVICES_ROOT, BACKROOMS_ROOT, REPO_ROOT):
 	if str(candidate) not in sys.path:
 		sys.path.insert(0, str(candidate))
 
@@ -179,9 +180,13 @@ def upgrade_inventory_schema(target_engine) -> None:
 
 
 def init_inventory_schema() -> None:
-	"""Create or upgrade the inventory and telemetry schemas on startup."""
+	"""Create or upgrade the inventory, telemetry, and reporting schemas."""
 	upgrade_inventory_schema(engine)
 
 	from services.telemetry.storage import ensure_telemetry_table
 
 	ensure_telemetry_table(engine)
+
+	from services.reporting.storage import init_reporting_schema
+
+	init_reporting_schema(engine)
