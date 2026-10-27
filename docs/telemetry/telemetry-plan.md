@@ -341,6 +341,27 @@ The **Inventory API is canonical for all five mandatory inventory events** and f
 
 The validating receiver is hosted by the **Inventory API** at `POST /telemetry/events`. `TELEMETRY_ENDPOINT` configures backend delivery; `NEXT_PUBLIC_TELEMETRY_ENDPOINT` configures the browser. Sprint 2 retains both the URL and the envelope model.
 
+### 5.2.2 Sprint 2 storage mapping
+
+The real receiver keeps the Sprint 1 URL and the unchanged `TelemetryEvent` model. It accepts `{ "events": [...] }` as a loose list, validates each item independently, inserts valid items with one bulk operation, and returns `{ "received": N, "stored": M, "rejected": R }`. A non-object item is rejected individually; a missing or non-list `events` field is a malformed envelope (`422`); a storage failure rolls back and returns `503`.
+
+| DB column | Source |
+|---|---|
+| `id` | Database UUID primary key (`gen_random_uuid()`) |
+| `timestamp` | `event.timestamp` |
+| `service` | `web` → `backoffice`; `inventory-api`, `supply-directory-api`, and `analyzer-api` preserved |
+| `event_type` | Exact catalogue identifier |
+| `level` | Explicit mapping: `error` for `frontend_error_captured`, `network_request_failed`, `login_failed`, `password_reset_failed`; `warn` for validation, rejections, threshold, cost variance, and session expiry; otherwise `info` |
+| `value` | Documented numeric property: `page_view.load_duration_ms`, `api_latency_recorded.duration_ms`, `incident_report_analyzed.duration_ms`, `kit_cost_variance_detected.variance_percent`, and `quantity` for the inventory order/threshold events; otherwise null |
+| `message` | Sanitised `frontend_error_captured.message` only; every other event stores null |
+| `tags` | Sanitised, allowlisted `properties` plus a reserved `_meta` object containing `eventId`, `sessionId`, `userId`, `schemaVersion`, and `requestId` |
+
+`tags._meta` is storage metadata, not an event-property allowlist expansion. Reporting must ignore `_meta` and use the flat business dimensions. Query strings are stripped from `page_path`, `referrer_path`, and `target`; error messages have emails, URLs, and sensitive query values redacted before they reach either `message` or `tags.message`.
+
+The table is append-only: no application UPDATE or DELETE operations. The three required indexes are `timestamp`, `event_type`, and a GIN index on `tags`. RLS is enabled and `anon`/`authenticated` are revoked; the backend connects with direct database credentials. The reproducible migration is `Inventory-API/migrations/002_telemetry_events.sql`, applied idempotently by `init_inventory_schema()`; SQLite tests create the equivalent table from SQLAlchemy metadata.
+
+Duplicate delivery is accepted. Retries and Beacon can produce duplicate rows with the same `eventId`, and `stored` counts each row; Sprint 2 does not claim exactly-once storage and does not add a unique constraint. Future deduplication can use `tags._meta.eventId` without changing the envelope.
+
 ### 5.3 Shared property dictionary
 
 | Property | Type | Rule |

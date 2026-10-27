@@ -209,8 +209,8 @@ def test_queue_discards_an_exhausted_batch_without_raising():
 
 
 def test_unknown_inventory_event_is_rejected():
-	with pytest.raises(ValueError, match="Unsupported inventory telemetry event"):
-		build_event("page_view", {"page_path": "/"})
+	with pytest.raises(ValueError, match="Unsupported event type"):
+		build_event("unknown_event", {})
 
 
 def test_new_events_receive_unique_ids():

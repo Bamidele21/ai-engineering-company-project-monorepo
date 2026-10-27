@@ -179,5 +179,9 @@ def upgrade_inventory_schema(target_engine) -> None:
 
 
 def init_inventory_schema() -> None:
-	"""Create or upgrade the inventory schema on startup."""
+	"""Create or upgrade the inventory and telemetry schemas on startup."""
 	upgrade_inventory_schema(engine)
+
+	from services.telemetry.storage import ensure_telemetry_table
+
+	ensure_telemetry_table(engine)

@@ -11,13 +11,8 @@ from uuid import UUID, uuid4
 
 import httpx
 
-from .constants import (
-	EVENT_PROPERTY_ALLOWLISTS,
-	EVENT_REQUIRED_PROPERTIES,
-	EVENT_SCHEMA_VERSIONS,
-	INVENTORY_SOURCE,
-	NON_NULL_MANDATORY_PROPERTIES,
-)
+from .catalog import validate_event_payload
+from .constants import EVENT_SCHEMA_VERSIONS, INVENTORY_SOURCE
 
 logger = logging.getLogger("nexova.telemetry")
 
@@ -45,27 +40,6 @@ def _utc_timestamp(value: datetime | None = None) -> str:
 	)
 
 
-def _validate_properties(event_type: str, properties: dict[str, Any]) -> None:
-	allowed = EVENT_PROPERTY_ALLOWLISTS.get(event_type)
-	if allowed is None:
-		raise ValueError(f"Unsupported inventory telemetry event: {event_type}")
-
-	unexpected = set(properties) - allowed
-	if unexpected:
-		raise ValueError(
-			f"Unexpected properties for {event_type}: {sorted(unexpected)}"
-		)
-
-	missing = EVENT_REQUIRED_PROPERTIES[event_type] - set(properties)
-	if missing:
-		raise ValueError(f"Missing properties for {event_type}: {sorted(missing)}")
-
-	if event_type != "direct_stock_edit_rejected":
-		for key in NON_NULL_MANDATORY_PROPERTIES & set(properties):
-			if properties[key] is None:
-				raise ValueError(f"{event_type}.{key} must not be null")
-
-
 def build_event(
 	event_type: str,
 	properties: dict[str, Any],
@@ -76,14 +50,15 @@ def build_event(
 	source: str = INVENTORY_SOURCE,
 	timestamp: datetime | None = None,
 ) -> dict[str, Any]:
-	_validate_properties(event_type, properties)
+	schema_version = EVENT_SCHEMA_VERSIONS.get(event_type, "1.0")
+	validate_event_payload(event_type, source, schema_version, properties)
 	return {
 		"eventId": str(uuid4()),
 		"timestamp": _utc_timestamp(timestamp),
 		"sessionId": _uuid_or_new(session_id),
 		"userId": str(user_id) if user_id is not None else None,
 		"event_type": event_type,
-		"schemaVersion": EVENT_SCHEMA_VERSIONS.get(event_type, "1.0"),
+		"schemaVersion": schema_version,
 		"requestId": _uuid_or_new(request_id),
 		"source": source,
 		"properties": dict(properties),
