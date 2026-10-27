@@ -1,5 +1,31 @@
 # Progress
 
+# Business Performance Pipeline design (2026-10-26)
+
+Scope changed:
+1. `data/pipelines/PIPELINE_DESIGN.md` (new) — design document for the weekly business performance pipeline. No orchestration code, migrations, tests, or dependencies were added.
+
+What changed:
+1. Documented the current telemetry state and the business gap: `public.telemetry_events` captures the four required inventory events, but the existing `GET /telemetry/report` and `backrooms/services/telemetry/analysis.py` only answer engineering volume, error-share, and page-load questions.
+2. Defined the purpose and four KPIs from `ETL-company-Briefing.md`: weekly material cost per office/programme, kits delivered, shortage frequency, and cost-variance frequency, with the grain `(office, programme_id, week_start)` and Monday UTC weeks.
+3. Specified extraction from `public.telemetry_events` (four event types, `service='inventory-api'`, UTC windows), dedup by `tags._meta.eventId`, validation/quarantine, zero-fill from the real office/programme spine, and no currency conversion.
+4. Specified the exact `reporting.weekly_office_program_performance` DDL from the briefing, the idempotent `ON CONFLICT (office, programme_id, week_start)` upsert, and the full-week transactional recompute after a load failure.
+5. Designed the `reporting.pipeline_runs` execution log (26 fields with justification) and `reporting.pipeline_rejected_events` quarantine table, including heartbeats, checkpoints, concurrency locks, stale-run recovery, and late-event recompute/backfill.
+6. Mapped the pipeline to Prefect: `weekly_office_program_performance_flow`, four tasks, states, blocks, a Monday 02:00 UTC schedule, and an optional daily reconcile deployment.
+7. Designed the new `backrooms/services/reporting/` module (the monorepo implementation of the milestone's logical `services/reporting/`) with the three required endpoints and their `data/pipelines/` functions, plus the Docker/Compose and import-path changes the implementation will need.
+8. Added observability, reconciliation, security/PII rules, future test strategy, risks, and a milestone traceability matrix.
+
+Validation performed:
+1. Verified the design file exists at `data/pipelines/PIPELINE_DESIGN.md` with all required identifiers: destination table, three endpoint paths, four event types, `reporting.pipeline_runs`, Prefect flow/tasks, `week_start`, `EUR`, and `USD`.
+2. Compared the destination DDL against `ETL-company-Briefing.md` section 5: column names, types, defaults, and `unique (office, programme_id, week_start)` match exactly.
+3. Markdown structure check: 21 top-level sections, 44 balanced code fences, no TODO/TBD/FIXME placeholders, and no trailing whitespace.
+4. No protected path was modified. `git status --short` shows only the two untracked briefing/context files, the new design file, and this progress entry. `CONTEXT.md`, `company-choice.md`, `data/raw/**`, `infra/**`, `internal/**`, `mcps/**`, and `.env` are untouched.
+5. Documentation-only exemption under `.agents/rules/test-coverage.md` exception #1: no functional code changed, so no application tests are required.
+
+Remaining risks / notes:
+1. Implementation is future work in Part 2. The design flags the missing `received_at` ingestion timestamp, the Docker/Compose `./data` mount needed for `backrooms/services/reporting` to import `data.pipelines`, the `kits_delivered_count` semantic confirmation with Laura/Elena, and the no-cache default for the KPI endpoint.
+2. No commit was made. The design file and progress entry remain in the working tree for review.
+
 # Telemetry Sprint 3 — cached technical report and dashboard (2026-10-23)
 
 Scope changed:
