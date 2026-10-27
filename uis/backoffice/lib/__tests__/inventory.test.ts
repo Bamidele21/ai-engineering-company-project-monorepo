@@ -34,9 +34,14 @@ afterEach(() => {
 });
 
 describe("stockLevel", () => {
-  it("classifies 10 units or more as healthy", () => {
+  it("classifies stock at the default minimum or more as healthy", () => {
     expect(stockLevel(10)).toBe("healthy");
     expect(stockLevel(38)).toBe("healthy");
+  });
+
+  it("uses a per-asset minimum instead of the default", () => {
+    expect(stockLevel(9, 5)).toBe("healthy");
+    expect(stockLevel(4, 5)).toBe("low");
   });
 
   it("classifies 1-9 units as low and 0 as out", () => {
@@ -78,10 +83,12 @@ describe("listAssets", () => {
     const assets = [
       {
         id: 1,
-        name: "Laptop 14\" Business",
-        sku: "NXV-IT-001",
-        category: "hardware",
+        name: "B2B sales certification kit",
+        sku: "NXV-CRT-001",
+        category: "certification",
         office: "Valencia",
+        programme_id: 1,
+        min_stock: 10,
         current_stock: 12,
       },
     ];
@@ -109,8 +116,10 @@ describe("createInboundOrder", () => {
       id: 5,
       asset_id: 1,
       quantity: 10,
-      supplier: "TechDistrib Valencia S.L.",
+      supplier: "PrintWorks Valencia S.L.",
       office: "Valencia",
+      unit_cost: 12.5,
+      currency: "EUR",
       created_at: "2026-10-08T09:00:00Z",
       user_uuid: "uuid-1",
     };
@@ -119,8 +128,10 @@ describe("createInboundOrder", () => {
     const result = await createInboundOrder({
       asset_id: 1,
       quantity: 10,
-      supplier: "TechDistrib Valencia S.L.",
+      supplier: "PrintWorks Valencia S.L.",
       office: "Valencia",
+      unit_cost: 12.5,
+      currency: "EUR",
     });
 
     expect(result).toEqual(created);
@@ -130,8 +141,10 @@ describe("createInboundOrder", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       asset_id: 1,
       quantity: 10,
-      supplier: "TechDistrib Valencia S.L.",
+      supplier: "PrintWorks Valencia S.L.",
       office: "Valencia",
+      unit_cost: 12.5,
+      currency: "EUR",
     });
   });
 });

@@ -11,6 +11,7 @@ import {
   type ExitType,
   type Office,
 } from "@/lib/inventory";
+import { trackValidationFailure } from "@/lib/telemetry/validation";
 
 interface OutboundFormState {
   asset_id: string;
@@ -88,19 +89,40 @@ function OutboundOrderForm() {
     setFormError("");
     setFormSuccess("");
 
+    const currentPath =
+      typeof window === "undefined" ? "/" : window.location.pathname;
+
     const assetId = Number(form.asset_id);
     if (!Number.isInteger(assetId) || assetId <= 0) {
+      trackValidationFailure(
+        "outbound_order_form",
+        "asset_id",
+        "asset_required",
+        currentPath
+      );
       setFormError("Select the asset for this outbound order.");
       return;
     }
 
     const quantity = Number(form.quantity);
     if (!Number.isInteger(quantity) || quantity <= 0) {
+      trackValidationFailure(
+        "outbound_order_form",
+        "quantity",
+        "quantity_gt_0",
+        currentPath
+      );
       setFormError("Quantity must be a whole number greater than zero.");
       return;
     }
 
     if (form.exit_type === "allocation" && !form.assigned_to.trim()) {
+      trackValidationFailure(
+        "outbound_order_form",
+        "assigned_to",
+        "assigned_to_required",
+        currentPath
+      );
       setFormError("Assigned to is required when the exit type is allocation.");
       return;
     }

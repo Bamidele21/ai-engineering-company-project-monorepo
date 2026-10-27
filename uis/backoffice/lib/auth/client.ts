@@ -1,4 +1,12 @@
 import { clearToken, getToken } from "./storage";
+import { shouldEmitThrottled } from "../telemetry/catalog";
+import { normalizeNetworkTarget, pagePath } from "../telemetry/sanitize";
+import {
+  createRequestId,
+  endSession,
+  getSessionId,
+} from "../telemetry/session";
+import { trackWithRequestId } from "../telemetry/telemetry";
 
 export const AUTH_API_URL =
   process.env.NEXT_PUBLIC_SUPPLIERS_API_URL ?? "http://localhost:8000";
@@ -12,6 +20,7 @@ export function redirectToLogin(): void {
 
   isRedirecting = true;
   clearToken();
+  endSession();
 
   const current = `${window.location.pathname}${window.location.search}`;
   const target = current.startsWith("/login")
@@ -21,7 +30,7 @@ export function redirectToLogin(): void {
   window.location.assign(target);
 }
 
-function buildHeaders(init: RequestInit): Headers {
+function buildHeaders(init: RequestInit, requestId: string): Headers {
   const headers = new Headers(init.headers);
 
   if (
@@ -31,6 +40,9 @@ function buildHeaders(init: RequestInit): Headers {
   ) {
     headers.set("Content-Type", "application/json");
   }
+
+  headers.set("X-Request-Id", requestId);
+  headers.set("X-Session-Id", getSessionId());
 
   const token = getToken();
   if (token) {
@@ -44,14 +56,27 @@ export async function authorizedFetch(
   url: string,
   init: RequestInit = {}
 ): Promise<Response> {
+  const requestId = createRequestId();
   let response: Response;
   try {
     response = await fetch(url, {
       ...init,
-      headers: buildHeaders(init),
+      headers: buildHeaders(init, requestId),
       cache: "no-store",
     });
   } catch {
+    const target = normalizeNetworkTarget(url);
+    const currentPath = pagePath(
+      typeof window === "undefined" ? "/" : window.location.pathname
+    );
+    const throttleKey = `network:${getSessionId()}:${target}:${currentPath}`;
+    if (shouldEmitThrottled(throttleKey, 60_000)) {
+      trackWithRequestId(
+        "network_request_failed",
+        { target, page_path: currentPath },
+        requestId
+      );
+    }
     throw new Error(
       "Network error — unable to reach the server. Please check your connection and try again."
     );

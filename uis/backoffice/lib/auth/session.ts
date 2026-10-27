@@ -1,4 +1,5 @@
 import { parseApiError } from "../api/errors";
+import { endSession, startAuthenticatedSession } from "../telemetry/session";
 import { AUTH_API_URL, authorizedFetch } from "./client";
 import { clearToken, setToken } from "./storage";
 import type {
@@ -43,6 +44,7 @@ export async function login(email: string, password: string): Promise<void> {
 
   const payload = (await response.json()) as TokenResponse;
   setToken(payload.access_token);
+  startAuthenticatedSession();
 }
 
 export async function register(payload: RegisterPayload): Promise<void> {
@@ -71,6 +73,7 @@ export async function register(payload: RegisterPayload): Promise<void> {
 
 export function logout(): void {
   clearToken();
+  endSession();
 }
 
 export async function fetchMe(): Promise<UserWithProfile> {
