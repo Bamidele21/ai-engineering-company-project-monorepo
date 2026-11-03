@@ -108,6 +108,29 @@ services:
     networks:
       - nexova-net
 
+  nightly-scheduler:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.nightly
+    env_file:
+      - .env
+    environment:
+      TZ: UTC
+      # Container-to-container Prefect API; overrides the env_file value.
+      PREFECT_API_URL: http://prefect-server:4200/api
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./backrooms/services:/app/backrooms/services:ro
+      # Read-write: the exported CSV files land in host data/raw/. The system
+      # python carries the pipeline deps, so this mount cannot shadow a venv.
+      - ./data:/app/data:rw
+    depends_on:
+      - inventory-api
+      - prefect-server
+    restart: unless-stopped
+    networks:
+      - nexova-net
+
 networks:
   nexova-net:
     name: nexova-net
