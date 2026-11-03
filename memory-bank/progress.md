@@ -1,5 +1,40 @@
 # Progress
 
+# Nightly telemetry export job — DEV-53 cron milestone (2026-11-02)
+
+Scope changed:
+1. `backrooms/services/job_runner/` (new) — `storage.py` (SQLAlchemy Core mirror of `reporting.job_runs` + idempotent `ensure_job_runs_table`), `service.py` (state-machine repository: create/claim/delete/finalize, `has_processing_lock`, `has_completed_for_date`, `recover_stale_runs`, `sanitize_error`), `migrations/001_job_runs.sql` (idempotent DDL: check-constrained status, `(job_name, target_date)` index, RLS + revokes).
+2. `scripts/nightly_export.py` (new) — standalone nightly job: `TARGET_DATE` override or previous UTC day, CSV export of `telemetry_events` (half-open UTC window, atomic tmp+`os.replace`, `data/raw/telemetry_YYYY-MM-DD.csv` only when absent), pipeline subprocess trigger (`python data/pipelines/pipeline.py` — the Milestone 6 entry point; the spec's `data.pipelines.telemetry_kpi_daily.run` does not exist in this repo), and `job_runs` bookkeeping with `pending → processing → completed | failed`.
+3. `scripts/Dockerfile.nightly` + `scripts/nightly-crontab` (new) — supercronic scheduler image with system-wide pipeline deps (`uv pip install --system`) so the `./data` rw mount cannot shadow a venv (the prefect-worker failure mode); cron `0 3 * * *` UTC.
+4. `docker-compose.yml` — new `nightly-scheduler` service (env_file + container Prefect URL override, ro scripts/backrooms mounts, rw `./data` mount, `depends_on: inventory-api, prefect-server`, `restart: unless-stopped`).
+5. `backrooms/services/Inventory-API/database.py` — `init_inventory_schema()` now also calls `ensure_job_runs_table` (API startup keeps the table present).
+6. `backrooms/services/pyproject.toml` — `job_runner/tests` in `testpaths`, `services.job_runner` in coverage source.
+7. Tests: `job_runner/tests/test_service.py` (13) + `test_nightly_export.py` (13, script loaded by file path) + one `Inventory-API` migration test. `scripts/README.md` documents the script and trigger.
+
+What changed:
+1. The distributed lock is the `processing` status itself, made race-safe by the partial unique index `ux_job_runs_one_processing` (same pattern as `ux_pipeline_runs_one_active`); a second simultaneous instance aborts silently (claim `IntegrityError` → pending row deleted, exit 0).
+2. Idempotency is per `(job_name, target_date)` via a completed row; re-runs log `[skipped]` and exit 0.
+3. No zombie rows: any failure finalizes `failed` with a sanitized (300-char) error; hard-killed runs are reclaimed by `recover_stale_runs` (processing rows older than 6 h → failed) before each run.
+4. The script is fully independent of FastAPI (own env/engine bootstrap, no `Inventory-API` imports); every log line carries timestamp, job name, and a `[status]` token.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 265 passed (238 baseline + 26 job_runner + 1 migration test).
+2. `uv run pytest -q` from `data/pipelines`: 24 passed, 8 skipped (unchanged baseline).
+3. `docker compose config -q` and `git diff --check` passed (LF→CRLF notices only).
+4. Live Supabase run: `pending → processing → completed`, CSV written, pipeline subprocess exit 0. Immediate re-run logged `[skipped] already completed`.
+5. Two simultaneous live instances: winner completed, loser logged `[aborted] lost the processing-lock claim race` and exited 0; no zombie row.
+6. Failure demo: unreachable `DATABASE_URL` → ERROR log, exit 1, traceback propagated.
+7. Backfills via `TARGET_DATE`: 2026-10-25 (0 rows) and 2026-10-27 (16 rows; CSV excerpt with UTC timestamps and JSON tags captured for the PR).
+8. Developer approved the `data/raw/**` writes in-session (AGENTS.md protected path).
+9. Docker: `nightly-scheduler` image built and the service started; supercronic crash-looped as PID 1 ("Failed to fork exec") and was fixed by adding `dumb-init` as PID 1 (supercronic must run as a child); a `* * * * *` probe job fired at the minute boundary; `docker compose exec nightly-scheduler python scripts/nightly_export.py` ran against the live DB and logged the idempotent skip.
+
+Remaining risks / notes:
+1. A failed run cannot persist its `failed` row when the database itself is unreachable; the failure row is guaranteed for mid-run failures (unit-tested).
+2. Generated CSVs in `data/raw/` are runtime artifacts and are not committed; the folder is not gitignored by design.
+3. `cronjob-context.md` remains untracked (course ticket context, same handling as earlier context files).
+4. The next scheduled tick (03:00 UTC) was not awaited; the cron-fire probe plus the in-container script run exercised the same paths.
+5. `memory-bank/projectbrief.md` remains stale (pre-existing).
+
 # Container fix — backend image carries data/ and the worker venv survives (2026-10-27)
 
 Scope changed:

@@ -1,0 +1,39 @@
+# Nightly scheduler image: supercronic + nightly_export script + pipeline CLI deps.
+# Build context: repository root (docker compose uses `context: .`).
+#
+# Dependencies are installed system-wide so the pipeline subprocess never
+# depends on anything under the `./data` bind mount (the host copy shadows the
+# image's `data/pipelines/.venv`, which broke the prefect worker once before).
+
+FROM python:3.13-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# Same runtime dependency set as data/pipelines/pyproject.toml.
+RUN uv pip install --system --no-cache \
+    "sqlalchemy>=2.0" \
+    "psycopg2-binary>=2.9" \
+    "python-dotenv>=1.0" \
+    "prefect>=3" \
+    "httpx>=0.28"
+
+# dumb-init is PID 1: it reaps zombies and forwards signals. supercronic
+# crash-loops with "Failed to fork exec" when it runs as PID 1 in this
+# environment, so it must stay a child process.
+RUN apt-get update && apt-get install -y --no-install-recommends dumb-init \
+    && rm -rf /var/lib/apt/lists/*
+
+# .dockerignore already excludes **/.venv, .env files, and data/raw.
+COPY data ./data
+COPY scripts ./scripts
+COPY backrooms ./backrooms
+
+ADD https://github.com/aptible/supercronic/releases/download/v0.2.33/supercronic-linux-amd64 /usr/local/bin/supercronic
+RUN chmod +x /usr/local/bin/supercronic
+
+ENV PYTHONPATH="/app"
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["supercronic", "/app/scripts/nightly-crontab"]

@@ -190,3 +190,7 @@ def init_inventory_schema() -> None:
 	from services.reporting.storage import init_reporting_schema
 
 	init_reporting_schema(engine)
+
+	from services.job_runner.storage import ensure_job_runs_table
+
+	ensure_job_runs_table(engine)
