@@ -29,6 +29,7 @@ services:
     depends_on:
       - suppliers-api
       - inventory-api
+      - analyzer-api
     networks:
       - nexova-net
 
@@ -108,6 +109,112 @@ services:
     networks:
       - nexova-net
 
+  nightly-scheduler:
+    build:
+      context: .
+      dockerfile: scripts/Dockerfile.nightly
+    env_file:
+      - .env
+    environment:
+      TZ: UTC
+      # Container-to-container Prefect API; overrides the env_file value.
+      PREFECT_API_URL: http://prefect-server:4200/api
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./backrooms/services:/app/backrooms/services:ro
+      # Read-write: the exported CSV files land in host data/raw/. The system
+      # python carries the pipeline deps, so this mount cannot shadow a venv.
+      - ./data:/app/data:rw
+    depends_on:
+      - inventory-api
+      - prefect-server
+    restart: unless-stopped
+    networks:
+      - nexova-net
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    # Broker for the async task queue. ``noeviction`` guarantees queued task
+    # messages and results are never evicted under memory pressure.
+    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    networks:
+      - nexova-net
+
+  flower:
+    image: mher/flower:2.0.1
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Flower 2.x requires auth on its API by default; this is a local
+      # development monitor, so expose the read API without credentials.
+      FLOWER_UNAUTHENTICATED_API: "true"
+    depends_on:
+      - redis
+    networks:
+      - nexova-net
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: backrooms/services/Dockerfile
+    # The worker is a process of its own: stopping the API never stops the
+    # worker or loses queued messages (Redis keeps them until ACK).
+    # -E sends task events so Flower can monitor this worker.
+    command: celery -A services.task_queue.celery_app:celery_app worker --loglevel=info --concurrency=2 -E
+    # The celery CLI adds its working directory to sys.path; /app/backrooms
+    # makes the ``services`` package importable.
+    working_dir: /app/backrooms
+    env_file:
+      - .env
+    environment:
+      # Container-to-container broker; do not use localhost here.
+      REDIS_URL: redis://redis:6379/0
+      # Staged CSVs are shared with the analyzer API via a bind mount.
+      ANALYZER_UPLOAD_DIR: /app/uploads
+      PYTHONPATH: /app/backrooms:/app
+    volumes:
+      - ./backrooms/services:/app/backrooms/services
+      # The analyzer task imports scripts.CSV_analyzer from the repo root.
+      - ./scripts:/app/scripts:ro
+      # Shared staging area: the API writes, the worker reads.
+      - ./backrooms/services/APIs/uploads:/app/uploads
+    depends_on:
+      - redis
+    networks:
+      - nexova-net
+
+  analyzer-api:
+    build:
+      context: .
+      dockerfile: backrooms/services/Dockerfile
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      # Container-to-container broker; do not use localhost here.
+      REDIS_URL: redis://redis:6379/0
+      ANALYZER_UPLOAD_DIR: /app/uploads
+      PYTHONPATH: /app/backrooms:/app
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backrooms/services:/app/backrooms/services
+      # The CSV export endpoint imports scripts.CSV_analyzer from the repo root.
+      - ./scripts:/app/scripts:ro
+      # Shared staging area with the Celery worker.
+      - ./backrooms/services/APIs/uploads:/app/uploads
+    command: sh -c "cd /app/backrooms/services/APIs && uvicorn analyzer-api:app --host 0.0.0.0 --port 8002 --reload"
+    depends_on:
+      - redis
+    networks:
+      - nexova-net
+
 networks:
   nexova-net:
     name: nexova-net
@@ -116,3 +223,4 @@ networks:
 volumes:
   prefect-data:
   prefect-results:
+  redis-data:

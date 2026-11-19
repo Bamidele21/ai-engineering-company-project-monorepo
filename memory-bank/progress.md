@@ -1,5 +1,66 @@
 # Progress
 
+# Async task queue — DEV-55 Celery + Redis milestone (2026-11-18)
+
+Scope changed:
+1. `backrooms/services/task_queue/` (new) — `celery_app.py` (Celery app, Redis broker+result backend from `REDIS_URL`, ACK-after-success via `task_acks_late`+`task_reject_on_worker_lost`, JSON serializers, 90s soft / 180s hard time limits), `tasks.py` (`nexova.analyze_incident_csv`: validates and analyzes a staged CSV; `OSError` autoretries `max_retries=3` with exponential backoff + jitter; exhausted retries record the DLQ in-task with task_id/attempt/error/timestamp; logs task_id, attempt, status, duration per run), `storage.py` + `migrations/001_dead_letter_tasks.sql` (PostgreSQL `task_queue.dead_letter_tasks`, SQLite metadata mirror for tests, RLS + revokes like `job_runner`).
+2. `backrooms/services/APIs/analyzer-api.py` — converted the slowest request-cycle operation (incident CSV batch analysis): `POST /api/incidents/analyze` stages the upload as `{task_id}.csv` in `ANALYZER_UPLOAD_DIR`, enqueues with `apply_async(task_id=...)` (message carries only the path), returns `202 {task_id, status: pending}`; new `GET /tasks/{task_id}` (pending/started/success/failure mapped from Celery states), `GET /api/incidents/results/export?task_id=`, `GET /tasks/dead-letter`; lifespan creates the upload dir + DLQ schema.
+3. `docker-compose.yml` — new `redis` (7-alpine, `noeviction`, volume), `flower` (mher/flower:2.0.1, port 5555, `FLOWER_UNAUTHENTICATED_API`), `celery-worker` (services image, `-E` events, `working_dir: /app/backrooms`, shared uploads bind mount, container `REDIS_URL` override), `analyzer-api` (port 8002, same shared staging mount).
+4. `uis/backoffice/lib/incidents.ts` (new) — typed client: `analyzeIncident` (202 → task_id), `fetchTaskStatus`, `pollTaskStatus` (interval/timeout/now/sleep injectable); `app/incidents/page.tsx` polls until success/failure and exports by task_id; `IncidentReadout` imports the `Analysis` type from lib.
+5. `backrooms/services/pyproject.toml` + `uv.lock` + `requirements.txt` — added `celery>=5.7`, `redis`, `flower`; `task_queue/tests` in testpaths, coverage source.
+6. `.env` — `REDIS_URL` (host dev), `NEXT_PUBLIC_ANALYZER_API_URL` → port 8002. Root + backrooms READMEs document worker start/stop, Flower, and the retry/DLQ demo.
+
+What changed (design decisions):
+1. Slowest-operation selection: the analyzer CSV analysis (up to 10 MB parsed inside the request cycle, inside an `async def`); the pipeline trigger was already async via Prefect and report GETs are indexed DB reads.
+2. Messages stay lightweight: only `{staged_path, original_name}` travel through Redis; the worker reads the file from the shared staging dir and removes it on success/permanent failure (kept across retries).
+3. Permanent vs transient failures: bad CSV (`ValueError`/`csv.Error`/`UnicodeDecodeError`) fails on the first attempt with `InvalidCsvError`; only `OSError` retries (3x, countdown doubles per attempt, capped 30s, jittered). DLQ move happens in the task body on the final attempt so the original error message survives (Celery's `MaxRetriesExceededError` would drop it).
+4. Eager-mode tests drive the worker's redelivery cycle explicitly (`apply(retries=n)`), because Celery eager mode surfaces `Retry` instead of re-executing — verified against celery 5.7 tracer source.
+5. `score_counts` is now part of the task result (keys as strings) because the export endpoint reads the JSON result from the backend instead of an in-process global; export reconstructs `Counter`s at the serialization boundary (JSON dicts lack Counter's missing→0 semantics).
+6. Celery 5.7 removed the `--app-dir` CLI flag: the worker runs with `working_dir: /app/backrooms` (the celery CLI adds its CWD to sys.path).
+
+Validation performed:
+1. `uv run pytest` from `backrooms/services`: 286 passed (26 new/updated across `task_queue/tests` and `APIs/tests`).
+2. `npx jest uis/backoffice`: 109 passed across 13 suites (9 new incidents polling tests); `npx tsc --noEmit -p uis/backoffice/tsconfig.json`: clean.
+3. Live end-to-end against Docker Redis + Flower and a host worker/API: 202 + task_id → `success` with result → CSV export correct; invalid CSV → `failure` with `InvalidCsvError` detail.
+4. Retry/DLQ demo: enqueued with the worker stopped (message survived in Redis), deleted the staged file, started the worker → 4 attempts at ~0s/1s/2s/4s (exponential backoff), `task moved to DLQ attempt=4`, row verified in Supabase `task_queue.dead_letter_tasks` via `GET /tasks/dead-letter`.
+5. Flower shows both tasks (one SUCCESS, one FAILURE); `FLOWER_UNAUTHENTICATED_API=true` needed because Flower 2.x requires API auth by default.
+6. Supabase was briefly reporting `tenant/user not found` mid-verification (project paused); code degrades gracefully (worker logs, `/tasks/dead-letter` returns 503) and the DB came back up for the DLQ write.
+
+# Nightly telemetry export job — DEV-53 cron milestone (2026-11-02)
+
+Scope changed:
+1. `backrooms/services/job_runner/` (new) — `storage.py` (SQLAlchemy Core mirror of `reporting.job_runs` + idempotent `ensure_job_runs_table`), `service.py` (state-machine repository: create/claim/delete/finalize, `has_processing_lock`, `has_completed_for_date`, `recover_stale_runs`, `sanitize_error`), `migrations/001_job_runs.sql` (idempotent DDL: check-constrained status, `(job_name, target_date)` index, RLS + revokes).
+2. `scripts/nightly_export.py` (new) — standalone nightly job: `TARGET_DATE` override or previous UTC day, CSV export of `telemetry_events` (half-open UTC window, atomic tmp+`os.replace`, `data/raw/telemetry_YYYY-MM-DD.csv` only when absent), pipeline subprocess trigger (`python data/pipelines/pipeline.py` — the Milestone 6 entry point; the spec's `data.pipelines.telemetry_kpi_daily.run` does not exist in this repo), and `job_runs` bookkeeping with `pending → processing → completed | failed`.
+3. `scripts/Dockerfile.nightly` + `scripts/nightly-crontab` (new) — supercronic scheduler image with system-wide pipeline deps (`uv pip install --system`) so the `./data` rw mount cannot shadow a venv (the prefect-worker failure mode); cron `0 3 * * *` UTC.
+4. `docker-compose.yml` — new `nightly-scheduler` service (env_file + container Prefect URL override, ro scripts/backrooms mounts, rw `./data` mount, `depends_on: inventory-api, prefect-server`, `restart: unless-stopped`).
+5. `backrooms/services/Inventory-API/database.py` — `init_inventory_schema()` now also calls `ensure_job_runs_table` (API startup keeps the table present).
+6. `backrooms/services/pyproject.toml` — `job_runner/tests` in `testpaths`, `services.job_runner` in coverage source.
+7. Tests: `job_runner/tests/test_service.py` (13) + `test_nightly_export.py` (13, script loaded by file path) + one `Inventory-API` migration test. `scripts/README.md` documents the script and trigger.
+
+What changed:
+1. The distributed lock is the `processing` status itself, made race-safe by the partial unique index `ux_job_runs_one_processing` (same pattern as `ux_pipeline_runs_one_active`); a second simultaneous instance aborts silently (claim `IntegrityError` → pending row deleted, exit 0).
+2. Idempotency is per `(job_name, target_date)` via a completed row; re-runs log `[skipped]` and exit 0.
+3. No zombie rows: any failure finalizes `failed` with a sanitized (300-char) error; hard-killed runs are reclaimed by `recover_stale_runs` (processing rows older than 6 h → failed) before each run.
+4. The script is fully independent of FastAPI (own env/engine bootstrap, no `Inventory-API` imports); every log line carries timestamp, job name, and a `[status]` token.
+
+Validation performed:
+1. `uv run pytest -q` from `backrooms/services`: 265 passed (238 baseline + 26 job_runner + 1 migration test).
+2. `uv run pytest -q` from `data/pipelines`: 24 passed, 8 skipped (unchanged baseline).
+3. `docker compose config -q` and `git diff --check` passed (LF→CRLF notices only).
+4. Live Supabase run: `pending → processing → completed`, CSV written, pipeline subprocess exit 0. Immediate re-run logged `[skipped] already completed`.
+5. Two simultaneous live instances: winner completed, loser logged `[aborted] lost the processing-lock claim race` and exited 0; no zombie row.
+6. Failure demo: unreachable `DATABASE_URL` → ERROR log, exit 1, traceback propagated.
+7. Backfills via `TARGET_DATE`: 2026-10-25 (0 rows) and 2026-10-27 (16 rows; CSV excerpt with UTC timestamps and JSON tags captured for the PR).
+8. Developer approved the `data/raw/**` writes in-session (AGENTS.md protected path).
+9. Docker: `nightly-scheduler` image built and the service started; supercronic crash-looped as PID 1 ("Failed to fork exec") and was fixed by adding `dumb-init` as PID 1 (supercronic must run as a child); a `* * * * *` probe job fired at the minute boundary; `docker compose exec nightly-scheduler python scripts/nightly_export.py` ran against the live DB and logged the idempotent skip.
+
+Remaining risks / notes:
+1. A failed run cannot persist its `failed` row when the database itself is unreachable; the failure row is guaranteed for mid-run failures (unit-tested).
+2. Generated CSVs in `data/raw/` are runtime artifacts and are not committed; the folder is not gitignored by design.
+3. `cronjob-context.md` remains untracked (course ticket context, same handling as earlier context files).
+4. The next scheduled tick (03:00 UTC) was not awaited; the cron-fire probe plus the in-container script run exercised the same paths.
+5. `memory-bank/projectbrief.md` remains stale (pre-existing).
+
 # Container fix — backend image carries data/ and the worker venv survives (2026-10-27)
 
 Scope changed:

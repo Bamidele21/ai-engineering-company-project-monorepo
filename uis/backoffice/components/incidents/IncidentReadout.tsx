@@ -1,16 +1,6 @@
 "use client";
 
-export type Analysis = {
-  total: number;
-  valid: number;
-  invalid: number;
-  invalid_counts: Record<string, number>;
-  category_counts: Record<string, number>;
-  status_counts: Record<string, number>;
-  closed_count: number;
-  scored_count: number;
-  average_score: number | null;
-};
+import type { Analysis } from "@/lib/incidents";
 
 const invalidLabels: Record<string, string> = {
   missing_client_company: "Missing client company",

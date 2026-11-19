@@ -1,0 +1,5 @@
+# Nexova nightly telemetry export + ETL trigger.
+# Cron expression: 0 3 * * * (daily 03:00 UTC), executed by supercronic inside
+# the nightly-scheduler compose container. Job output streams to the
+# container's stdout/stderr (docker compose logs nightly-scheduler).
+0 3 * * * cd /app && python scripts/nightly_export.py

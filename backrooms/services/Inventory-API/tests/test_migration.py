@@ -129,3 +129,15 @@ def test_upgrade_is_idempotent():
 			for asset in session.exec(select(Asset).order_by(Asset.id)).all()
 		]
 		assert second_assets == first_assets
+
+
+def test_init_inventory_schema_creates_job_runs(sqlite_engine, monkeypatch):
+	monkeypatch.setattr(database, "engine", sqlite_engine)
+
+	database.init_inventory_schema()
+
+	with sqlite_engine.connect() as connection:
+		count = connection.execute(
+			text("SELECT count(*) FROM reporting.job_runs")
+		).scalar_one()
+	assert count == 0
