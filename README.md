@@ -64,6 +64,72 @@ ai-engineering-company-project-monorepo/
 
 ---
 
+## Async task queue (Celery + Redis)
+
+Heavy operations are decoupled from the API through a Celery task queue backed
+by Redis. The converted operation is the incident CSV analysis
+(`POST /api/incidents/analyze` on the Analyzer API, port 8002), the slowest
+synchronous operation in the request cycle before this milestone.
+
+```
+Client → Analyzer API (producer) → Redis (broker) → Celery worker (consumer) → Redis (result)
+```
+
+- The endpoint stages the upload and returns `202 Accepted` with a `task_id`
+  immediately; it never waits for the analysis.
+- `GET /tasks/{task_id}` reports `pending`, `started`, `success` (with the
+  result), or `failure` (with the error).
+- Tasks retry up to 3 times with exponential backoff on transient read
+  failures; exhausted tasks land in the dead letter queue
+  (`GET /tasks/dead-letter`, persisted in `task_queue.dead_letter_tasks`).
+- Messages carry only the staged file path — never the file contents.
+
+### Running the stack
+
+```bash
+docker compose up -d redis flower celery-worker analyzer-api
+```
+
+| Service | Port | Purpose |
+|---|---|---|
+| `redis` | 6379 | Broker + result backend (`noeviction` memory policy) |
+| `flower` | 5555 | Queue monitoring UI (http://localhost:5555) |
+| `celery-worker` | — | Separate process that consumes tasks (never inside the API) |
+| `analyzer-api` | 8002 | FastAPI producer + `GET /tasks/{task_id}` status endpoint |
+
+**Starting the worker** (inside Docker, recommended):
+
+```bash
+docker compose up -d celery-worker
+```
+
+**Stopping the worker:**
+
+```bash
+docker compose stop celery-worker
+```
+
+Stopping the API does not stop the worker or lose queued messages: Redis keeps
+them until the worker acknowledges them after a successful run.
+
+**Host development** (without Docker for the Python processes): start Redis
+via `docker compose up -d redis`, then run from `backrooms/`:
+
+```bash
+uv run --project services celery -A services.task_queue.celery_app:celery_app worker --loglevel=info --pool=solo
+```
+
+The `REDIS_URL` and `DATABASE_URL` environment variables are read from the
+repo-root `.env`.
+
+**Demonstrating a retry and the dead letter queue:** upload a CSV, then delete
+the staged file (`backrooms/services/APIs/uploads/{task_id}.csv`) before the
+worker reads it. The worker retries 3 times with increasing backoff, records
+the exhausted task in `task_queue.dead_letter_tasks`, and the failure appears
+in Flower.
+
+---
+
 ## Milestones (reference)
 
 | Milestone | Focus        | Typical deliverables                        |

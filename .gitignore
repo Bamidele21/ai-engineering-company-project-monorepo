@@ -10,3 +10,6 @@ coverage/
 # Python virtual environments and Prefect local state
 .venv/
 prefect-data/
+
+# Staged uploads for the async task queue (Celery worker staging area)
+backrooms/services/APIs/uploads/

@@ -3,7 +3,7 @@
 import { ChangeEvent, DragEvent, useState } from "react";
 import dynamic from "next/dynamic";
 import { BackofficeShell } from "@/components/backoffice/BackofficeShell";
-import type { Analysis } from "@/components/incidents/IncidentReadout";
+import { analyzeIncident, pollTaskStatus, type Analysis } from "@/lib/incidents";
 
 const IncidentReadout = dynamic(
   () => import("@/components/incidents/IncidentReadout"),
@@ -21,6 +21,7 @@ const API_URL = process.env.NEXT_PUBLIC_ANALYZER_API_URL ?? "http://localhost:80
 export default function IncidentsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,16 +30,25 @@ export default function IncidentsPage() {
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => { event.preventDefault(); setIsDragging(false); chooseFile(event.dataTransfer.files?.[0]); };
   const analyzeFile = async () => {
     if (!file) { setError("Choose an incident CSV before starting the analysis."); return; }
-    setIsLoading(true); setError(""); setAnalysis(null);
-    const formData = new FormData(); formData.append("file", file);
+    setIsLoading(true); setError(""); setAnalysis(null); setTaskId(null);
     try {
-      const response = await fetch(`${API_URL}/api/incidents/analyze`, { method: "POST", body: formData });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail ?? "The incident file could not be analyzed.");
-      setAnalysis(payload as Analysis);
+      // The API stages the file and returns 202 + task_id immediately; the
+      // worker analyzes it off the request cycle.
+      const nextTaskId = await analyzeIncident(file, API_URL);
+      setTaskId(nextTaskId);
+      const status = await pollTaskStatus(nextTaskId, API_URL);
+      if (status.status === "failure") {
+        throw new Error(status.error ?? "The incident file could not be analyzed.");
+      }
+      if (!status.result) {
+        throw new Error("The analysis finished without a result.");
+      }
+      setAnalysis(status.result);
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "The analyzer API is unavailable. Check that it is running and try again."); } finally { setIsLoading(false); }
   };
-  const exportUrl = `${API_URL}/api/incidents/results/export`;
+  const exportUrl = taskId
+    ? `${API_URL}/api/incidents/results/export?task_id=${encodeURIComponent(taskId)}`
+    : `${API_URL}/api/incidents/results/export`;
 
   return (
     <BackofficeShell

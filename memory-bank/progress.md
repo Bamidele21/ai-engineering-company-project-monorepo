@@ -1,5 +1,31 @@
 # Progress
 
+# Async task queue — DEV-55 Celery + Redis milestone (2026-11-18)
+
+Scope changed:
+1. `backrooms/services/task_queue/` (new) — `celery_app.py` (Celery app, Redis broker+result backend from `REDIS_URL`, ACK-after-success via `task_acks_late`+`task_reject_on_worker_lost`, JSON serializers, 90s soft / 180s hard time limits), `tasks.py` (`nexova.analyze_incident_csv`: validates and analyzes a staged CSV; `OSError` autoretries `max_retries=3` with exponential backoff + jitter; exhausted retries record the DLQ in-task with task_id/attempt/error/timestamp; logs task_id, attempt, status, duration per run), `storage.py` + `migrations/001_dead_letter_tasks.sql` (PostgreSQL `task_queue.dead_letter_tasks`, SQLite metadata mirror for tests, RLS + revokes like `job_runner`).
+2. `backrooms/services/APIs/analyzer-api.py` — converted the slowest request-cycle operation (incident CSV batch analysis): `POST /api/incidents/analyze` stages the upload as `{task_id}.csv` in `ANALYZER_UPLOAD_DIR`, enqueues with `apply_async(task_id=...)` (message carries only the path), returns `202 {task_id, status: pending}`; new `GET /tasks/{task_id}` (pending/started/success/failure mapped from Celery states), `GET /api/incidents/results/export?task_id=`, `GET /tasks/dead-letter`; lifespan creates the upload dir + DLQ schema.
+3. `docker-compose.yml` — new `redis` (7-alpine, `noeviction`, volume), `flower` (mher/flower:2.0.1, port 5555, `FLOWER_UNAUTHENTICATED_API`), `celery-worker` (services image, `-E` events, `working_dir: /app/backrooms`, shared uploads bind mount, container `REDIS_URL` override), `analyzer-api` (port 8002, same shared staging mount).
+4. `uis/backoffice/lib/incidents.ts` (new) — typed client: `analyzeIncident` (202 → task_id), `fetchTaskStatus`, `pollTaskStatus` (interval/timeout/now/sleep injectable); `app/incidents/page.tsx` polls until success/failure and exports by task_id; `IncidentReadout` imports the `Analysis` type from lib.
+5. `backrooms/services/pyproject.toml` + `uv.lock` + `requirements.txt` — added `celery>=5.7`, `redis`, `flower`; `task_queue/tests` in testpaths, coverage source.
+6. `.env` — `REDIS_URL` (host dev), `NEXT_PUBLIC_ANALYZER_API_URL` → port 8002. Root + backrooms READMEs document worker start/stop, Flower, and the retry/DLQ demo.
+
+What changed (design decisions):
+1. Slowest-operation selection: the analyzer CSV analysis (up to 10 MB parsed inside the request cycle, inside an `async def`); the pipeline trigger was already async via Prefect and report GETs are indexed DB reads.
+2. Messages stay lightweight: only `{staged_path, original_name}` travel through Redis; the worker reads the file from the shared staging dir and removes it on success/permanent failure (kept across retries).
+3. Permanent vs transient failures: bad CSV (`ValueError`/`csv.Error`/`UnicodeDecodeError`) fails on the first attempt with `InvalidCsvError`; only `OSError` retries (3x, countdown doubles per attempt, capped 30s, jittered). DLQ move happens in the task body on the final attempt so the original error message survives (Celery's `MaxRetriesExceededError` would drop it).
+4. Eager-mode tests drive the worker's redelivery cycle explicitly (`apply(retries=n)`), because Celery eager mode surfaces `Retry` instead of re-executing — verified against celery 5.7 tracer source.
+5. `score_counts` is now part of the task result (keys as strings) because the export endpoint reads the JSON result from the backend instead of an in-process global; export reconstructs `Counter`s at the serialization boundary (JSON dicts lack Counter's missing→0 semantics).
+6. Celery 5.7 removed the `--app-dir` CLI flag: the worker runs with `working_dir: /app/backrooms` (the celery CLI adds its CWD to sys.path).
+
+Validation performed:
+1. `uv run pytest` from `backrooms/services`: 286 passed (26 new/updated across `task_queue/tests` and `APIs/tests`).
+2. `npx jest uis/backoffice`: 109 passed across 13 suites (9 new incidents polling tests); `npx tsc --noEmit -p uis/backoffice/tsconfig.json`: clean.
+3. Live end-to-end against Docker Redis + Flower and a host worker/API: 202 + task_id → `success` with result → CSV export correct; invalid CSV → `failure` with `InvalidCsvError` detail.
+4. Retry/DLQ demo: enqueued with the worker stopped (message survived in Redis), deleted the staged file, started the worker → 4 attempts at ~0s/1s/2s/4s (exponential backoff), `task moved to DLQ attempt=4`, row verified in Supabase `task_queue.dead_letter_tasks` via `GET /tasks/dead-letter`.
+5. Flower shows both tasks (one SUCCESS, one FAILURE); `FLOWER_UNAUTHENTICATED_API=true` needed because Flower 2.x requires API auth by default.
+6. Supabase was briefly reporting `tenant/user not found` mid-verification (project paused); code degrades gracefully (worker logs, `/tasks/dead-letter` returns 503) and the DB came back up for the DLQ write.
+
 # Nightly telemetry export job — DEV-53 cron milestone (2026-11-02)
 
 Scope changed:
